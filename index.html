@@ -171,6 +171,12 @@
     animation: pulse 1.4s ease-in-out infinite; vertical-align: middle; }
   @keyframes pulse { 50% { opacity: .3; } }
 
+  /* Leaders: All / Teams */
+  .leader-tabs button.on { background: var(--accent); color: var(--accent-text); border-color: transparent; }
+  .team-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+  .team-chips button { padding: 8px 12px; font-size: 14px; border-radius: 99px; white-space: nowrap; }
+  .team-chips button.on { border: 2px solid var(--c); background: color-mix(in srgb, var(--c) 18%, var(--card)); }
+
   /* Offline banner and messages */
   .pill {
     position: fixed; left: 50%; transform: translateX(-50%); z-index: 20; display: none;
@@ -1632,6 +1638,7 @@ function deleteGame(id) {
 
 // ---------- Leaderboard ----------
 let leaderSort = 'g';
+let leaderView = 'all', leaderTeamId = null;   // 'all' players, or one 'team'
 function sortLeaders(k) { leaderSort = k; renderLeaders(); }
 
 function renderLeaders() {
@@ -1641,22 +1648,45 @@ function renderLeaders() {
     if (g.status === 'scheduled') continue; // not played yet
     for (const tid of [g.homeId, g.awayId]) for (const p of team(tid).players) gp[p.id] = (gp[p.id] || 0) + 1;
   }
-  const rows = db.teams.flatMap(t => t.players.map(p => ({
+  // "Teams" view: pick a team (defaults to your own claimed team, else the first one).
+  if (leaderView === 'team' && !team(leaderTeamId)) leaderTeamId = myPlayer()?.team.id || db.teams[0]?.id;
+  const t = leaderView === 'team' ? team(leaderTeamId) : null;
+  const rows = (t ? [t] : db.teams).flatMap(t => t.players.map(p => ({
     ...p, team: t, gp: gp[p.id] || 0, pp: 0, g: 0, a: 0, d: 0, to: 0, c: 0, pm: 0, ...all[p.id]
   })));
   rows.sort((x, y) => leaderSort === 'name'
     ? x.name.localeCompare(y.name)
     : (leaderSort === 'to' ? x.to - y.to : y[leaderSort] - x[leaderSort]) || y.pm - x.pm);
 
-  const played = db.games.filter(g => g.status !== 'scheduled').length;
+  const played = db.games.filter(g => g.status !== 'scheduled' && (!t || g.homeId === t.id || g.awayId === t.id));
+  // Team record from finished games.
+  const rec = { w: 0, l: 0, tie: 0, pf: 0, pa: 0 };
+  if (t) for (const g of played.filter(g => g.status === 'final')) {
+    const us = score(g, t.id), them = score(g, g.homeId === t.id ? g.awayId : g.homeId);
+    rec.pf += us; rec.pa += them;
+    if (us > them) rec.w++; else if (us < them) rec.l++; else rec.tie++;
+  }
   app.innerHTML = `
     <h1>Season leaders</h1>
-    <p class="muted">${played} game${played === 1 ? '' : 's'} played. Tap a column to sort, or a name to see that player’s games.</p>
-    <div class="card">${statTable(rows, [
+    <div class="tabs leader-tabs">
+      <button class="${t ? '' : 'on'}" onclick="leaderView = 'all'; renderLeaders()">All</button>
+      <button class="${t ? 'on' : ''}" onclick="leaderView = 'team'; renderLeaders()">Teams</button>
+    </div>
+    ${leaderView === 'team' ? (db.teams.length ? `
+      <div class="team-chips">${db.teams.map(x => `
+        <button class="${x.id === t.id ? 'on' : ''}" style="--c:${esc(x.color)}"
+          onclick="leaderTeamId = '${x.id}'; renderLeaders()"><span class="dot" style="background:${esc(x.color)}"></span>${esc(x.name)}</button>`).join('')}
+      </div>
+      <div class="card">
+        <b><span class="dot" style="background:${esc(t.color)}"></span>${esc(t.name)}</b>
+        <span class="muted">· ${rec.w}–${rec.l}${rec.tie ? `–${rec.tie}` : ''} record · ${rec.pf} scored, ${rec.pa} allowed</span>
+      </div>` : '<p class="muted">No teams yet.</p>') : ''}
+    <p class="muted">${played.length} game${played.length === 1 ? '' : 's'} played. Tap a column to sort, or a name to see that player’s games.</p>
+    ${rows.length ? `<div class="card">${statTable(rows, [
       { k: 'name', h: 'Player', l: true, f: r => `<a href="#/profile/${r.id}" style="color:inherit"><span class="dot" style="background:${r.team.color}"></span>${esc(r.name)}</a>` },
       { k: 'gp', h: 'GP' }, { k: 'pp', h: 'PP' }, { k: 'g', h: 'G' }, { k: 'a', h: 'A' }, { k: 'd', h: 'D' },
       { k: 'to', h: 'TO' }, { k: 'c', h: 'Cal' }, { k: 'pm', h: '+/-' }
-    ], leaderSort, 'sortLeaders')}</div>
+    ], leaderSort, 'sortLeaders')}</div>` : t ? '<p class="muted">This team has no players yet.</p>' : ''}
     <p class="muted">+/- = goals + assists + Ds − turnovers</p>`;
 }
 
