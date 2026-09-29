@@ -156,6 +156,21 @@
   .actions .divider { font-size: 13px; margin-top: 6px; }
   .actions button.in { background: var(--good); color: #fff; border-color: transparent; }
 
+  /* Player claims and profiles */
+  .claim-row { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px;
+    padding: 10px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
+  .claim-row:last-child { border-bottom: 0; padding-bottom: 0; }
+  .badge.you { background: var(--good); color: #fff; }
+  .claimed { font-size: 12px; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .stat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; text-align: center; }
+  .stat-grid b { display: block; font-size: 26px; font-variant-numeric: tabular-nums; }
+  .stat-grid span { font-size: 12px; }
+  tr.me td { background: color-mix(in srgb, var(--good) 15%, transparent); }
+  .scoreboard.live-board { position: relative; }
+  .live-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--bad); margin-right: 6px;
+    animation: pulse 1.4s ease-in-out infinite; vertical-align: middle; }
+  @keyframes pulse { 50% { opacity: .3; } }
+
   /* Offline banner and messages */
   .pill {
     position: fixed; left: 50%; transform: translateX(-50%); z-index: 20; display: none;
@@ -178,7 +193,7 @@
   <a class="logo" href="#/">🥏 Frisbee<span>Stats</span> <small id="modeTag"></small></a>
   <a href="#/games" data-nav="games">Games</a>
   <a href="#/leaders" data-nav="leaders">Leaders</a>
-  <a href="#/teams" data-nav="teams" class="admin-only">Teams</a>
+  <a href="#/teams" data-nav="teams">Teams</a>
 </header>
 <main id="app"></main>
 <div id="sheet"></div>
@@ -229,7 +244,7 @@ function seed() {
   };
 }
 
-const emptyDb = () => ({ teams: [], games: [], settings: { onField: 7 } });
+const emptyDb = () => ({ teams: [], games: [], settings: { onField: 7 }, claims: [], claimsReady: false });
 let db = emptyDb();
 let dataLeagueId = null;   // which league `db` currently holds
 let loading = null, loadError = null, channel = null;
@@ -281,17 +296,35 @@ async function fetchLeague(id) {
     fetchAll(() => sb.from('games').select('*').eq('league_id', id).order('id')),
     fetchAll(() => sb.from('events').select('*').eq('league_id', id).order('seq'))
   ]);
+  const claims = await fetchClaims(id);
   const next = {
     teams: teams.map(t => ({ id: t.id, name: t.name, color: t.color, players: [] })),
     games: games.map(toGame),
-    settings: { onField: lg.on_field }
+    settings: { onField: lg.on_field },
+    claims: claims || [],
+    claimsReady: !!claims   // false until supabase/004_player_claims.sql has been run
   };
-  for (const p of players) next.teams.find(t => t.id === p.team_id)?.players.push({ id: p.id, name: p.name, number: p.number });
+  for (const p of players) next.teams.find(t => t.id === p.team_id)?.players.push({ id: p.id, name: p.name, number: p.number, userId: p.user_id || null });
   const byId = Object.fromEntries(next.games.map(g => [g.id, g]));
   for (const e of events) byId[e.game_id]?.events.push(toEvent(e));
   if (league?.id === id) { league.name = lg.name; league.border_colors = lg.border_colors; rememberLeague(); }
   return next;
 }
+
+// Player claims you're allowed to see: your own, or all of them in leagues you run.
+// Returns null if the claims table doesn't exist yet.
+async function fetchClaims(id) {
+  const { data, error } = await sb.from('player_claims').select('*').eq('league_id', id).order('created_at');
+  return error ? null : data;
+}
+
+// ----- Claimed players -----
+const me = () => session?.user.id;
+const allPlayers = () => db.teams.flatMap(t => t.players.map(p => ({ ...p, team: t })));
+const myPlayer = () => allPlayers().find(p => p.userId && p.userId === me());
+const myPendingClaim = () => db.claims.find(c => c.user_id === me() && c.status === 'pending');
+const pendingClaims = () => db.claims.filter(c => c.status === 'pending');
+const teamOf = pid => db.teams.find(t => t.players.some(p => p.id === pid));
 
 // First load of a league; route() shows "Loading…" until it's done.
 function loadLeague() {
@@ -412,6 +445,11 @@ function subscribeLeague(id) {
   on('DELETE', 'games', p => remoteDelete('game', p.old.id), null);
   on('DELETE', 'teams', p => { if (team(p.old.id)) refreshLeague(); }, null);
   on('DELETE', 'players', p => { if (db.teams.some(t => t.players.some(x => x.id === p.old.id))) refreshLeague(); }, null);
+  if (db.claimsReady) {   // only once the claims table exists
+    on('INSERT', 'player_claims', p => remoteClaim(p.new));
+    on('UPDATE', 'player_claims', p => remoteClaim(p.new));
+    on('DELETE', 'player_claims', p => { if (db.claims.some(c => c.id === p.old.id)) { db.claims = db.claims.filter(c => c.id !== p.old.id); rerender(); } }, null);
+  }
   channel.subscribe(status => {
     if (status !== 'SUBSCRIBED') return;
     if (subscribedOnce) refreshLeague(); // reconnected: catch up on anything missed
@@ -428,6 +466,18 @@ function remoteEvent(r) {
   const g = game(r.game_id);
   if (!g || g.events.some(e => e.id === r.id)) return; // not ours, or our own change coming back
   g.events.push(toEvent(r));
+  rerender();
+}
+
+function remoteClaim(c) {
+  const i = db.claims.findIndex(x => x.id === c.id), before = db.claims[i];
+  if (i >= 0) db.claims[i] = c; else db.claims.push(c);
+  const p = player(c.player_id);
+  // Notifications: admins hear about new requests; the person claiming hears the decision.
+  if (!before && c.status === 'pending' && isAdmin() && c.user_id !== me())
+    toast(`🔔 ${c.user_email || 'Someone'} wants to claim ${p.name}. Approve it on the Games page.`);
+  if (before?.status === 'pending' && c.user_id === me() && c.status !== 'pending')
+    toast(c.status === 'approved' ? `✅ You’re now linked to ${p.name}!` : `Your claim for ${p.name} was denied.`);
   rerender();
 }
 
@@ -540,12 +590,13 @@ function route() {
   if (recovering) return renderNewPassword();
   if (!session) return renderLogin();
   const [page, id] = location.hash.replace(/^#\/?/, '').split('/');
-  const inLeague = !!(league && mode) && ['games', 'game', 'box', 'leaders', 'teams', 'schedule', 'settings'].includes(page);
+  const inLeague = !!(league && mode) && ['games', 'game', 'box', 'leaders', 'teams', 'schedule', 'settings', 'profile'].includes(page);
   document.body.classList.toggle('no-nav', !inLeague);
   document.body.classList.toggle('player', !isAdmin());
   document.getElementById('modeTag').textContent = inLeague ? (isAdmin() ? 'Admin' : 'Player') : '';
   document.querySelectorAll('[data-nav]').forEach(a =>
-    a.classList.toggle('on', (a.dataset.nav === 'games' && ['games', 'game', 'box', 'schedule', 'settings'].includes(page)) || a.dataset.nav === page));
+    a.classList.toggle('on', (a.dataset.nav === 'games' && ['games', 'game', 'box', 'schedule', 'settings'].includes(page))
+      || (a.dataset.nav === 'teams' && page === 'profile') || a.dataset.nav === page));
   if (page === 'admin') return id === 'create' ? renderCreateLeague() : renderAdminHome();
   if (page === 'player') return renderPlayerHome();
   if (!inLeague) return renderMenu();
@@ -562,7 +613,8 @@ function route() {
   if (page === 'game' && game(id)) return isAdmin() ? renderTracker(game(id)) : renderBox(game(id));
   if (page === 'box' && game(id)) return renderBox(game(id));
   if (page === 'leaders') return renderLeaders();
-  if (page === 'teams' && isAdmin()) return renderTeams();
+  if (page === 'teams') return isAdmin() ? renderTeams() : renderRosters();
+  if (page === 'profile') return renderProfile(id);
   if (page === 'schedule' && isAdmin()) return renderSchedule();
   if (page === 'settings' && isAdmin()) return renderSettings();
   renderGames();
@@ -679,6 +731,14 @@ async function saveBorder(colors) {
   route();
 }
 
+// Which of these leagues have a game in progress right now.
+async function liveLeagueIds(ids) {
+  if (!ids.length) return new Set();
+  const { data } = await sb.from('games').select('league_id').eq('status', 'live').in('league_id', ids);
+  return new Set((data || []).map(r => r.league_id));
+}
+const liveBadge = '<span class="badge live" style="margin-left:6px">● LIVE</span>';
+
 async function renderAdminHome() {
   app.innerHTML = '<h1>League Admin</h1><p class="muted">Loading your leagues…</p>';
   const { data, error } = await sb.from('league_admins').select('leagues(id, name, border_colors)').eq('user_id', session.user.id);
@@ -687,11 +747,21 @@ async function renderAdminHome() {
   const mine = data.map(r => r.leagues).filter(Boolean).sort((a, b) => a.name.localeCompare(b.name));
   mine.forEach(l => leagueCache[l.id] = l);
   myLeagueIds = new Set(mine.map(l => l.id));
+  const ids = mine.map(l => l.id);
+  const [live, claims] = await Promise.all([
+    liveLeagueIds(ids),
+    ids.length ? sb.from('player_claims').select('league_id').eq('status', 'pending').in('league_id', ids).neq('user_id', me()) : { data: [] }
+  ]);
+  if (location.hash !== '#/admin') return;
+  const requests = {};
+  for (const c of claims.data || []) requests[c.league_id] = (requests[c.league_id] || 0) + 1;
   app.innerHTML = `
     <h1>League Admin</h1>
     ${mine.length ? `<h2>Your leagues</h2>${mine.map(l => `
       <a class="card game-link" href="#/games" style="${borderStyle(l.border_colors)}" onclick="enterLeague(leagueCache['${l.id}'], 'admin'); return false">
-        <b>${esc(l.name)}</b><span class="muted">Open →</span></a>`).join('')}`
+        <span><b>${esc(l.name)}</b>${live.has(l.id) ? liveBadge : ''}
+          ${requests[l.id] ? `<br><span class="muted">🔔 ${requests[l.id]} claim request${requests[l.id] === 1 ? '' : 's'}</span>` : ''}</span>
+        <span class="muted">Open →</span></a>`).join('')}`
       : '<div class="card"><b>You don’t manage any leagues yet.</b><div class="muted">Create a new league, or join one below with its league password.</div></div>'}
     <a class="btn primary" style="display:block" href="#/admin/create">+ Create league</a>
     <h2>Join a league</h2>
@@ -720,15 +790,17 @@ function searchLeagues(kind) {
     if (!box) return;
     if (error) { box.innerHTML = `<p class="msg error">${esc(dbErrorText(error))}</p>`; return; }
     data.forEach(l => leagueCache[l.id] = l);
+    const live = await liveLeagueIds(data.map(l => l.id));
+    if (!document.getElementById('results')) return;
     if (!data.length) {
       box.innerHTML = `<p class="muted">${q ? 'No leagues match that name.' : 'No leagues have been created yet.'}</p>`;
       return;
     }
     box.innerHTML = data.map(l => kind === 'player'
       ? `<a class="card game-link" href="#/games" style="${borderStyle(l.border_colors)}" onclick="enterLeague(leagueCache['${l.id}'], 'player'); return false">
-          <b>${esc(l.name)}</b><span class="muted">View →</span></a>`
+          <span><b>${esc(l.name)}</b>${live.has(l.id) ? liveBadge : ''}</span><span class="muted">View →</span></a>`
       : myLeagueIds.has(l.id)
-        ? `<div class="card game-link" style="${borderStyle(l.border_colors)}"><b>${esc(l.name)}</b><span class="badge">You’re an admin</span></div>`
+        ? `<div class="card game-link" style="${borderStyle(l.border_colors)}"><span><b>${esc(l.name)}</b>${live.has(l.id) ? liveBadge : ''}</span><span class="badge">You’re an admin</span></div>`
         : `<div class="card" id="join-${l.id}" style="${borderStyle(l.border_colors)}"><div class="game-link"><b>${esc(l.name)}</b>
             <button class="small" onclick="showJoin('${l.id}')">Join</button></div></div>`).join('');
   }, 250);
@@ -822,6 +894,7 @@ function renderGames() {
         <button class="primary" onclick="uploadLegacy(this)">Upload</button>
       </div>
     </div>` : ''}
+    ${isAdmin() ? claimRequestsCard() : myStatsCard()}
     ${isAdmin() && db.teams.length < 2 ? `<div class="card">
       <b>Add your teams first</b>
       <div class="muted">You need at least two teams to start a game. Add them on the <a href="#/teams">Teams</a> tab.</div>
@@ -842,6 +915,151 @@ function renderGames() {
       ${upcoming.map(gameCard).join('')}` : ''}
     ${results.length ? `<h2>Results</h2>${results.map(gameCard).join('')}` : ''}`;
   if (document.getElementById('away')) document.getElementById('away').value = db.teams[1].id;
+}
+
+// ---------- Player claims ----------
+function claimRequestsCard() {
+  const pending = pendingClaims();
+  if (!pending.length) return '';
+  return `
+    <div class="card" style="border:2px solid var(--accent)">
+      <b>🔔 Player claim request${pending.length === 1 ? '' : 's'} (${pending.length})</b>
+      ${pending.map(c => {
+        const p = player(c.player_id), t = teamOf(c.player_id);
+        return `<div class="claim-row">
+          <span><b>${esc(c.user_email || 'Someone')}</b> wants to claim
+            <b>#${esc(p.number)} ${esc(p.name)}</b>${t ? ` <span class="muted">(${esc(t.name)})</span>` : ''}</span>
+          <span class="row">
+            <button class="small" onclick="decideClaim('${c.id}', false, this)">Deny</button>
+            <button class="small primary" onclick="decideClaim('${c.id}', true, this)">Approve</button>
+          </span>
+        </div>`;
+      }).join('')}
+    </div>`;
+}
+
+async function decideClaim(id, approve, btn) {
+  btn.disabled = true;
+  const { data, error } = await sb.rpc('decide_claim', { p_claim_id: id, p_approve: approve });
+  if (error) { btn.disabled = false; toast(dbErrorText(error)); refreshLeague(); return; }
+  const p = player(data.player_id);
+  if (approve) {
+    // Mirror what the database did: link the player, and turn down anyone else waiting on them.
+    const pl = db.teams.flatMap(t => t.players).find(x => x.id === data.player_id);
+    if (pl) pl.userId = data.user_id;
+    db.claims.forEach(c => { if (c.player_id === data.player_id && c.status === 'pending') c.status = 'denied'; });
+  }
+  const i = db.claims.findIndex(c => c.id === id);
+  if (i >= 0) db.claims[i] = data;
+  toast(approve ? `Approved: ${data.user_email || 'they'} can now follow ${p.name}’s stats.` : `Denied the claim for ${p.name}.`);
+  route();
+}
+
+// Player side: a short "your stats" card, or a nudge to claim a player.
+function myStatsCard() {
+  if (!db.claimsReady) return '';
+  const mine = myPlayer(), pending = myPendingClaim();
+  if (mine) {
+    const s = { pp: 0, g: 0, a: 0, d: 0, to: 0, pm: 0, ...tally(db.games.flatMap(g => g.events))[mine.id] };
+    return `<a class="card game-link" href="#/profile/${mine.id}">
+      <span><span class="muted">Your stats · #${esc(mine.number)} ${esc(mine.name)}</span><br>
+        <b>${s.g} G · ${s.a} A · ${s.d} D · ${s.to} TO</b> <span class="muted">· ${s.pm >= 0 ? '+' : ''}${s.pm}</span></span>
+      <span class="muted">View →</span></a>`;
+  }
+  if (pending) return `<div class="card"><b>Claim pending</b>
+    <div class="muted">You asked to claim ${esc(player(pending.player_id).name)}. A league admin needs to approve it.</div></div>`;
+  return `<a class="card game-link" href="#/teams">
+    <span><b>Are you on a roster?</b><br><span class="muted">Claim your player to follow your own stats.</span></span>
+    <span class="muted">Teams →</span></a>`;
+}
+
+async function claimPlayer(pid) {
+  const p = player(pid);
+  if (!confirm(`Claim #${p.number} ${p.name}? An admin of ${league.name} will need to approve it.`)) return;
+  const { data, error } = await sb.rpc('request_claim', { p_player_id: pid });
+  if (error) return toast(dbErrorText(error));
+  db.claims.push(data);
+  toast('Claim sent! You’ll see your stats here once an admin approves it.');
+  route();
+}
+
+async function cancelClaim(id) {
+  if (!confirm('Cancel your claim request?')) return;
+  const { error } = await sb.rpc('cancel_claim', { p_claim_id: id });
+  if (error) return toast(dbErrorText(error));
+  db.claims = db.claims.filter(c => c.id !== id);
+  route();
+}
+
+async function releasePlayer(pid) {
+  const p = allPlayers().find(x => x.id === pid);
+  const mine = p.userId === me();
+  if (!confirm(mine ? `Unclaim ${p.name}? You’d need an admin to approve you again.` : `Unlink ${p.name} from the account that claimed them?`)) return;
+  const { error } = await sb.rpc('release_player', { p_player_id: pid });
+  if (error) return toast(dbErrorText(error));
+  const pl = db.teams.flatMap(t => t.players).find(x => x.id === pid);
+  if (pl) pl.userId = null;
+  route();
+}
+
+// Who claimed a player, for admins (from the approved claim).
+const claimedBy = pid => db.claims.find(c => c.player_id === pid && c.status === 'approved')?.user_email;
+
+// Read-only rosters for players, with Claim buttons.
+function renderRosters() {
+  const mine = myPlayer(), pending = myPendingClaim();
+  const canClaim = db.claimsReady && !mine && !pending;
+  app.innerHTML = `
+    <h1>Teams</h1>
+    ${!db.claimsReady ? '' : mine
+      ? `<div class="card"><b>You’re #${esc(mine.number)} ${esc(mine.name)} on ${esc(mine.team.name)}.</b>
+          <div class="muted"><a href="#/profile/${mine.id}">View your stats →</a></div></div>`
+      : pending ? `<div class="card"><b>Claim pending</b><div class="muted">Waiting for an admin to approve you as
+          ${esc(player(pending.player_id).name)}.</div></div>`
+      : '<p class="muted">Find yourself on a roster and tap <b>Claim</b>. Once a league admin approves it, you can follow your own stats.</p>'}
+    ${db.teams.length ? '' : '<p class="muted">No teams yet.</p>'}
+    ${db.teams.map(t => `
+      <div class="card">
+        <h2 style="margin-top:0"><span class="dot" style="background:${esc(t.color)}"></span>${esc(t.name)}</h2>
+        ${t.players.length ? `<ul class="roster">${t.players.map(p => `
+          <li><a href="#/profile/${p.id}" style="color:inherit;text-decoration:none"><span class="muted">#${esc(p.number)}</span> ${esc(p.name)}</a>
+            <span class="row" style="flex:0 0 auto">${
+              p.userId && p.userId === me() ? `<span class="badge you">YOU</span><button class="small" onclick="releasePlayer('${p.id}')">Unclaim</button>`
+              : p.userId ? '<span class="badge">CLAIMED</span>'
+              : pending?.player_id === p.id ? `<span class="badge scheduled">PENDING</span><button class="small" onclick="cancelClaim('${pending.id}')">Cancel</button>`
+              : canClaim ? `<button class="small primary" onclick="claimPlayer('${p.id}')">Claim</button>` : ''
+            }</span></li>`).join('')}
+        </ul>` : '<div class="muted">No players yet.</div>'}
+      </div>`).join('')}`;
+}
+
+// A player's season: totals plus game by game.
+function renderProfile(pid) {
+  const t = teamOf(pid);
+  if (!t) { location.hash = '#/teams'; return; }
+  const p = t.players.find(x => x.id === pid);
+  const zero = { pp: 0, g: 0, a: 0, d: 0, to: 0, c: 0, pm: 0 };
+  const played = db.games.filter(g => g.status !== 'scheduled' && (g.homeId === t.id || g.awayId === t.id))
+    .sort((a, b) => b.created - a.created);
+  const season = { ...zero, ...tally(played.flatMap(g => g.events))[pid] };
+  const rows = played.map(g => {
+    const opp = team(g.homeId === t.id ? g.awayId : g.homeId), us = score(g, t.id), them = score(g, opp.id);
+    return { gm: g, opp, result: `${g.status === 'live' ? 'LIVE ' : us > them ? 'W ' : us < them ? 'L ' : 'T '}${us}–${them}`, ...zero, ...tally(g.events)[pid] };
+  });
+  app.innerHTML = `
+    <div class="row"><h1>#${esc(p.number)} ${esc(p.name)}</h1>
+      ${p.userId === me() ? '<span class="badge you" style="flex:0 0 auto">YOU</span>' : ''}</div>
+    <p class="muted"><span class="dot" style="background:${esc(t.color)}"></span>${esc(t.name)} · ${played.length} game${played.length === 1 ? '' : 's'}</p>
+    <div class="card stat-grid">
+      ${[['Goals', season.g], ['Assists', season.a], ['Ds', season.d], ['Turnovers', season.to], ['Points played', season.pp], ['+/-', (season.pm > 0 ? '+' : '') + season.pm]]
+        .map(([k, v]) => `<div><b>${v}</b><span class="muted">${k}</span></div>`).join('')}
+    </div>
+    <h2>Game by game</h2>
+    ${rows.length ? `<div class="card">${statTable(rows, [
+      { k: 'opp', h: 'Game', l: true, f: r => `<a href="#/box/${r.gm.id}">vs ${esc(r.opp.name)}</a>
+        <div class="muted" style="font-size:12px">${esc(r.result)} · ${new Date(r.gm.created).toLocaleDateString()}</div>` },
+      { k: 'pp', h: 'PP' }, { k: 'g', h: 'G' }, { k: 'a', h: 'A' }, { k: 'd', h: 'D' }, { k: 'to', h: 'TO' }, { k: 'pm', h: '+/-' }
+    ])}</div>` : '<p class="muted">No games played yet.</p>'}`;
 }
 
 // ---------- League settings ----------
@@ -1065,6 +1283,21 @@ function newGame() {
 // ---------- Live tracker ----------
 const ui = { gameId: null, teamId: null, playerId: null };
 
+// The latest plays, newest first (used by the tracker and the live box score).
+function playLog(g, limit, emptyText) {
+  const recent = g.events.slice(-limit).reverse(), half = halftimeScore(g);
+  const mins = e => `${Math.max(0, Math.floor((e.t - g.created) / 60000))}'`;
+  if (!recent.length) return `<div class="muted">${emptyText}</div>`;
+  return `<ul class="log">${recent.map(e => e.type === 'half' ? `
+    <li><span class="time">${mins(e)}</span>
+      <span><span class="tag half">Halftime</span> ${half[0]}–${half[1]}</span></li>` : `
+    <li><span class="time">${mins(e)}</span>
+      <span><span class="dot" style="background:${team(e.teamId)?.color || '#888'}"></span>
+      <span class="tag ${e.type}">${LABEL[e.type]}</span> ${esc(pname(e.playerId))}
+      ${e.assistId ? `<span class="muted">from ${esc(pname(e.assistId))}</span>` : ''}</span></li>`).join('')}
+  </ul>`;
+}
+
 // League setting: how many players each team has on the field at once.
 const onFieldMax = () => db.settings?.onField || 7;
 
@@ -1089,9 +1322,6 @@ function renderTracker(g) {
   if (ui.gameId !== g.id) { ui.gameId = g.id; ui.teamId = g.homeId; }
   const h = team(g.homeId), a = team(g.awayId), t = team(ui.teamId);
   const s = tally(g.events);
-  const recent = g.events.slice(-8).reverse();
-  const start = g.created;
-  const mins = e => { const m = Math.floor((e.t - start) / 60000); return `${m}'`; };
   const half = halftimeScore(g);
   const roster = splitRoster(g, t.id);
   const playerBtn = p => {
@@ -1126,16 +1356,7 @@ function renderTracker(g) {
       <div class="muted" style="margin:14px 0 8px">Bench</div>
       <div class="players bench" style="--team:${t.color}">${roster.bench.map(playerBtn).join('')}</div>` : ''}
     <h2>Recent plays</h2>
-    <div class="card">
-      ${recent.length ? `<ul class="log">${recent.map(e => e.type === 'half' ? `
-        <li><span class="time">${mins(e)}</span>
-          <span><span class="tag half">Halftime</span> ${half[0]}–${half[1]}</span></li>` : `
-        <li><span class="time">${mins(e)}</span>
-          <span><span class="dot" style="background:${team(e.teamId).color}"></span>
-          <span class="tag ${e.type}">${LABEL[e.type]}</span> ${esc(pname(e.playerId))}
-          ${e.assistId ? `<span class="muted">from ${esc(pname(e.assistId))}</span>` : ''}</span></li>`).join('')}
-      </ul>` : '<div class="muted">Tap a player to record a play.</div>'}
-    </div>
+    <div class="card">${playLog(g, 8, 'Tap a player to record a play.')}</div>
     <div class="row">
       <button onclick="undo()" ${g.events.length ? '' : 'disabled'}>↶ Undo</button>
       <a class="btn" href="#/box/${g.id}">Box score</a>
@@ -1356,14 +1577,14 @@ function statTable(rows, cols, sortKey, onSortName) {
   return `<div class="table-wrap"><table>
     <thead><tr>${cols.map(c => `<th class="${c.l ? 'l' : ''} ${c.k === sortKey ? 'sorted' : ''}"
       ${onSortName && c.sort !== false ? `onclick="${onSortName}('${c.k}')"` : ''}>${c.h}</th>`).join('')}</tr></thead>
-    <tbody>${rows.map(r => `<tr>${cols.map(c => `<td class="${c.l ? 'l' : ''}">${c.f ? c.f(r) : r[c.k]}</td>`).join('')}</tr>`).join('')}</tbody>
+    <tbody>${rows.map(r => `<tr class="${r.userId && r.userId === me() ? 'me' : ''}">${cols.map(c => `<td class="${c.l ? 'l' : ''}">${c.f ? c.f(r) : r[c.k]}</td>`).join('')}</tr>`).join('')}</tbody>
   </table></div>`;
 }
 
 function renderBox(g) {
   const s = tally(g.events);
   const cols = [
-    { k: 'name', h: 'Player', l: true, f: r => `<span class="muted">#${esc(r.number)}</span> ${esc(r.name)}` },
+    { k: 'name', h: 'Player', l: true, f: r => `<a href="#/profile/${r.id}" style="color:inherit"><span class="muted">#${esc(r.number)}</span> ${esc(r.name)}</a>` },
     { k: 'pp', h: 'PP' }, { k: 'g', h: 'G' }, { k: 'a', h: 'A' }, { k: 'd', h: 'D' }, { k: 'to', h: 'TO' }, { k: 'pm', h: '+/-' }
   ];
   const side = t => {
@@ -1373,12 +1594,25 @@ function renderBox(g) {
       <div class="card">${statTable(rows, cols)}</div>`;
   };
   const h = team(g.homeId), a = team(g.awayId), half = halftimeScore(g);
+  const live = g.status === 'live';
   app.innerHTML = `
+    ${live ? `
+    <div class="card scoreboard live-board">
+      <div class="team" style="color:${h.color}">${esc(h.name)}</div>
+      <div>
+        <div class="muted"><span class="live-dot"></span><b style="color:var(--bad)">LIVE</b></div>
+        <div class="nums">${score(g, h.id)}–${score(g, a.id)}</div>
+        <div class="muted">${half ? `2nd half · HT ${half[0]}–${half[1]}` : '1st half'}</div>
+      </div>
+      <div class="team" style="color:${a.color}">${esc(a.name)}</div>
+    </div>
+    <p class="muted" style="text-align:center;margin-top:-4px">Updates automatically as plays are recorded.</p>` : `
     <div class="row" style="justify-content:space-between">
       <h1 style="flex:1">${esc(h.name)} ${score(g, h.id)} – ${score(g, a.id)} ${esc(a.name)}</h1>
       <span class="badge ${g.status}" style="flex:0 0 auto">${STATUS[g.status]}</span>
     </div>
-    <div class="muted">${new Date(g.created).toLocaleString()}${half ? ` · Halftime ${half[0]}–${half[1]}` : ''}</div>
+    <div class="muted">${new Date(g.created).toLocaleString()}${half ? ` · Halftime ${half[0]}–${half[1]}` : ''}</div>`}
+    ${live ? `<h2>Recent plays</h2><div class="card">${playLog(g, 10, 'No plays yet.')}</div>` : ''}
     ${side(h)}${side(a)}
     ${isAdmin() ? `<div class="row">
       ${g.status === 'live'
@@ -1414,11 +1648,12 @@ function renderLeaders() {
     ? x.name.localeCompare(y.name)
     : (leaderSort === 'to' ? x.to - y.to : y[leaderSort] - x[leaderSort]) || y.pm - x.pm);
 
+  const played = db.games.filter(g => g.status !== 'scheduled').length;
   app.innerHTML = `
     <h1>Season leaders</h1>
-    <p class="muted">${db.games.length} game${db.games.length === 1 ? '' : 's'} played. Tap a column to sort.</p>
+    <p class="muted">${played} game${played === 1 ? '' : 's'} played. Tap a column to sort, or a name to see that player’s games.</p>
     <div class="card">${statTable(rows, [
-      { k: 'name', h: 'Player', l: true, f: r => `<span class="dot" style="background:${r.team.color}"></span>${esc(r.name)}` },
+      { k: 'name', h: 'Player', l: true, f: r => `<a href="#/profile/${r.id}" style="color:inherit"><span class="dot" style="background:${r.team.color}"></span>${esc(r.name)}</a>` },
       { k: 'gp', h: 'GP' }, { k: 'pp', h: 'PP' }, { k: 'g', h: 'G' }, { k: 'a', h: 'A' }, { k: 'd', h: 'D' },
       { k: 'to', h: 'TO' }, { k: 'c', h: 'Cal' }, { k: 'pm', h: '+/-' }
     ], leaderSort, 'sortLeaders')}</div>
@@ -1453,7 +1688,10 @@ function teamCard(t) {
         <button class="small" onclick="editTeam('${t.id}')">Edit</button>
       </div>
       ${t.players.length ? `<ul class="roster">${t.players.map(p => `
-        <li><span><span class="muted">#${esc(p.number)}</span> ${esc(p.name)}</span></li>`).join('')}
+        <li><a href="#/profile/${p.id}" style="color:inherit;text-decoration:none"><span class="muted">#${esc(p.number)}</span> ${esc(p.name)}</a>
+          ${p.userId ? `<span class="row" style="flex:0 0 auto">
+            <span class="muted claimed" title="Claimed">✓ ${esc(claimedBy(p.id) || 'Claimed')}</span>
+            <button class="small" onclick="releasePlayer('${p.id}')">Unlink</button></span>` : ''}</li>`).join('')}
       </ul>` : '<div class="muted">No players yet. Tap Edit to add some.</div>'}
     </div>`;
 }
