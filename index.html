@@ -48,6 +48,7 @@
     display: inline-block; text-align: center; border: 1px solid var(--line);
   }
   button.primary, .btn.primary { background: var(--accent); color: var(--accent-text); border-color: transparent; }
+  button.danger { color: var(--bad); }
   button.small, .btn.small { padding: 6px 10px; font-size: 14px; border-radius: 8px; white-space: nowrap; }
   button:active { transform: scale(0.97); }
   select, input {
@@ -2013,6 +2014,7 @@ function teamCard(t) {
       <div class="row" style="margin-bottom:6px">
         <h2 style="margin:0;flex:1"><a href="#/team/${t.id}" style="color:inherit"><span class="dot" style="background:${esc(t.color)}"></span>${esc(t.name)}</a></h2>
         <button class="small" onclick="editTeam('${t.id}')">Edit</button>
+        <button class="small danger" onclick="deleteTeamById('${t.id}')">Delete</button>
       </div>
       ${t.players.length ? `<ul class="roster">${t.players.map(p => `
         <li><a href="#/profile/${p.id}" style="color:inherit;text-decoration:none"><span class="muted">#${esc(p.number)}</span> ${esc(p.name)}</a>
@@ -2095,14 +2097,33 @@ function saveTeam() {
 
 function cancelEdit() { editing = null; renderTeams(); }
 
-function deleteTeam() {
-  const id = editing.id;
-  if (db.games.some(g => g.homeId === id || g.awayId === id))
-    return alert('This team has games (played or scheduled), so it can’t be deleted. You can still rename it.');
-  if (!confirm(`Delete ${team(id).name} and its roster?`)) return;
-  db.teams = db.teams.filter(t => t.id !== id);
-  persist(() => sb.from('teams').delete().eq('id', id)); // its players are removed with it
-  editing = null; renderTeams();
+// The Delete button in the team editor.
+function deleteTeam() { deleteTeamById(editing.id); }
+
+// Delete a team and its roster. If it has games, those games (and all their plays and stats) go too,
+// since a game can't exist without both teams, so that case asks for the team's name to be typed.
+function deleteTeamById(id) {
+  const t = team(id);
+  const games = db.games.filter(g => g.homeId === id || g.awayId === id);
+  if (games.length) {
+    const played = games.filter(g => g.status !== 'scheduled').length, scheduled = games.length - played;
+    const parts = [played && `${played} played game${played === 1 ? '' : 's'}`, scheduled && `${scheduled} scheduled game${scheduled === 1 ? '' : 's'}`].filter(Boolean).join(' and ');
+    const typed = prompt(`Deleting ${t.name} also permanently deletes its ${parts}, including every stat recorded in them `
+      + `(for both teams). This can’t be undone.\n\nType the team name to confirm:`);
+    if (typed === null) return;
+    if (typed.trim().toLowerCase() !== t.name.trim().toLowerCase()) return alert('The name didn’t match, so nothing was deleted.');
+  } else if (!confirm(`Delete ${t.name} and its roster (${t.players.length} player${t.players.length === 1 ? '' : 's'})?`)) return;
+
+  const gameIds = games.map(g => g.id);
+  db.games = db.games.filter(g => !gameIds.includes(g.id));
+  db.teams = db.teams.filter(x => x.id !== id);
+  persist(steps(
+    ...(gameIds.length ? [() => sb.from('games').delete().in('id', gameIds)] : []),   // plays go with their games
+    () => sb.from('teams').delete().eq('id', id)                                      // players go with their team
+  ));
+  if (editing?.id === id) editing = null;
+  toast(`Deleted ${t.name}${gameIds.length ? ` and ${gameIds.length} game${gameIds.length === 1 ? '' : 's'}` : ''}.`);
+  renderTeams();
 }
 
 function addTeam() {
