@@ -246,6 +246,46 @@
   .hbar-track i { display: block; height: 100%; min-width: 4px; background: var(--series-1); border-radius: 0 4px 4px 0; }
   .hbar-val { text-align: right; font-variant-numeric: tabular-nums; }
 
+  /* Header: four tabs and the bell have to fit on a phone */
+  header { gap: 2px; padding: 8px 10px; }
+  header a[data-nav] { padding: 6px 7px; font-size: 14px; }
+  .bell { position: relative; border: 0; background: none; padding: 6px 4px 6px 8px; font-size: 17px; }
+  #bell-count { position: absolute; top: 0; right: -4px; background: var(--bad); color: #fff; font-size: 10px; font-weight: 800;
+    border-radius: 99px; padding: 1px 5px; line-height: 1.4; }
+  body.signed-out .bell { display: none; }
+  @media (max-width: 380px) { header .logo span, #modeTag { display: none; } }
+
+  /* Standings */
+  table.standings td:nth-child(2) { white-space: nowrap; }
+  .form { display: inline-flex; gap: 3px; }
+  .form a { width: 18px; height: 18px; border-radius: 4px; font-size: 11px; font-weight: 800; display: inline-grid; place-items: center;
+    text-decoration: none; color: #fff; }
+  .form-W { background: var(--good); } .form-L { background: var(--bad); } .form-T { background: var(--muted); }
+
+  /* Playoff bracket */
+  .bracket { display: flex; gap: 14px; overflow-x: auto; padding-bottom: 8px; align-items: stretch; }
+  .bround { flex: 0 0 200px; display: flex; flex-direction: column; justify-content: space-around; gap: 12px; }
+  .bround-name { font-size: 12px; font-weight: 800; text-transform: uppercase; color: var(--muted); }
+  .bmatch { background: var(--card); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+  .bmatch a { color: inherit; text-decoration: none; display: block; }
+  .bmatch.bye { opacity: .6; }
+  .bteam { display: flex; align-items: center; gap: 4px; padding: 8px 10px; font-size: 14px; border-bottom: 1px solid var(--line); }
+  .bteam b { margin-left: auto; font-variant-numeric: tabular-nums; }
+  .bteam.won { font-weight: 800; }
+  .seed { font-size: 11px; color: var(--muted); width: 16px; }
+  .bfoot { display: flex; justify-content: flex-end; gap: 6px; padding: 4px 8px; min-height: 8px; }
+  .bfoot:empty { padding: 0; }
+  .champion { font-size: 18px; border: 2px solid #eda100; text-align: center; }
+  .seed-list { margin: 8px 0 14px; padding-left: 22px; }
+  .seed-list li { padding: 3px 0; }
+
+  /* Notifications and installing */
+  .notes { display: grid; gap: 2px; max-height: 55vh; overflow-y: auto; }
+  .note { display: flex; flex-direction: column; gap: 2px; padding: 10px; border-radius: 10px; color: inherit; text-decoration: none; font-size: 14px; }
+  .note.unread { background: color-mix(in srgb, var(--accent) 12%, transparent); font-weight: 600; }
+  .note .muted { font-size: 12px; font-weight: 400; }
+  .install { width: 100%; text-align: left; font-weight: 400; margin-top: 14px; }
+
   /* Seasons and the Hall of Fame */
   .season-picker { display: flex; align-items: center; gap: 10px; margin: 0 0 12px; }
   .season-picker select { width: auto; flex: 1; max-width: 320px; padding: 8px 10px; }
@@ -287,13 +327,21 @@
 </style>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="stats.js"></script>
+<script src="league.js"></script>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#0f1115">
+<link rel="apple-touch-icon" href="icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Frisbee Stats">
 </head>
 <body>
 <header>
   <a class="logo" href="#/">🥏 Frisbee<span>Stats</span> <small id="modeTag"></small></a>
   <a href="#/games" data-nav="games">Games</a>
+  <a href="#/standings" data-nav="standings">Standings</a>
   <a href="#/leaders" data-nav="leaders">Leaders</a>
   <a href="#/teams" data-nav="teams">Teams</a>
+  <button class="bell" onclick="openNotes()" aria-label="Notifications">🔔<span id="bell-count" style="display:none"></span></button>
 </header>
 <main id="app"></main>
 <div id="sheet"></div>
@@ -358,7 +406,8 @@ function rememberLeague() {
 const toGame = r => ({
   id: r.id, homeId: r.home_id, awayId: r.away_id, status: r.status, created: Number(r.created_ms),
   when: r.scheduled_at, field: r.field, round: r.round, lineup: r.lineup, pointPlayers: r.point_players,
-  firstPull: r.first_pull || null, seasonId: r.season_id || null, events: []
+  firstPull: r.first_pull || null, seasonId: r.season_id || null,
+  stage: r.stage || 'regular', bracketSlot: r.bracket_slot || null, events: []
 });
 const toEvent = r => ({
   id: r.id, t: Number(r.t), type: r.type, teamId: r.team_id, playerId: r.player_id,
@@ -378,6 +427,7 @@ const gameRow = g => ({
   id: g.id, league_id: league.id, home_id: g.homeId, away_id: g.awayId, status: g.status, created_ms: g.created,
   scheduled_at: g.when || null, field: g.field ?? null, round: g.round ?? null,
   lineup: g.lineup || null, point_players: g.pointPlayers || null, ...seasonCols(g),
+  ...(db.playoffsReady ? { stage: g.stage || 'regular', bracket_slot: g.bracketSlot || null } : {}),   // columns added by 008
   ...(db.passReady ? { first_pull: g.firstPull || null } : {})   // column added by supabase/005
 });
 const eventRow = (g, e) => ({
@@ -399,7 +449,7 @@ async function fetchAll(table, leagueId, orders) {
 }
 
 async function fetchLeague(id) {
-  const [lg, teams, players, games, events, passProbe, seasons, hof] = await Promise.all([
+  const [lg, teams, players, games, events, passProbe, seasons, hof, playoffProbe] = await Promise.all([
     sb.from('leagues').select('name, border_colors, on_field, created_by').eq('id', id).single()
       .then(r => { if (r.error) throw r.error; return r.data; }),
     fetchAll('teams', id, ['created_at', 'id']),
@@ -408,7 +458,8 @@ async function fetchLeague(id) {
     fetchAll('events', id, ['seq']),
     sb.from('games').select('first_pull').limit(1),   // fails until supabase/005 has been run
     sb.from('seasons').select('*').eq('league_id', id).order('number'),        // these two fail until supabase/006
-    sb.from('hall_of_fame').select('*').eq('league_id', id).order('inducted_at')
+    sb.from('hall_of_fame').select('*').eq('league_id', id).order('inducted_at'),
+    sb.from('games').select('stage').limit(1)   // fails until supabase/008 has been run
   ]);
   const claims = await fetchClaims(id);
   const next = {
@@ -420,6 +471,7 @@ async function fetchLeague(id) {
     claimsReady: !!claims,           // false until supabase/004_player_claims.sql has been run
     passReady: !passProbe.error,     // false until supabase/005_pass_by_pass.sql has been run
     seasonsReady: !seasons.error,    // false until supabase/006_seasons.sql has been run
+    playoffsReady: !playoffProbe.error,   // false until supabase/008_playoffs.sql has been run
     seasons: seasons.data || [],
     hof: hof.data || []
   };
@@ -499,13 +551,23 @@ function loadLeague() {
   if (!loading) loading = fetchLeague(id)
     .then(next => {
       if (league?.id !== id) return;
-      db = next; dataLeagueId = id; loadError = null;
+      db = next; dataLeagueId = id; loadError = null; offlineData = null;
+      saveSnapshot(id, next);
       subscribeLeague(id);
     })
-    .catch(err => { loadError = dbErrorText(err); })
-    .finally(() => { loading = null; route(); });
+    .catch(async err => {
+      // No signal: fall back to the copy saved on this device, if there is one.
+      const snap = !err.code && await loadSnapshot(id);
+      if (snap && league?.id === id) {
+        db = snap.data; dataLeagueId = id; loadError = null; offlineData = snap.at;
+        subscribeLeague(id);   // connects by itself once the signal is back
+      } else loadError = dbErrorText(err);
+    })
+    .finally(() => { loading = null; updateSyncBadge(); route(); });
   return loading;
 }
+let offlineData = null;   // when set, the screens are showing the device's saved copy (from this time)
+window.addEventListener('online', () => { if (offlineData) refreshLeague(); });
 
 // Re-fetch everything (after someone else changes teams or settings, or after reconnecting).
 let refreshTimer, missedRemote = false;
@@ -519,7 +581,9 @@ function refreshLeague() {
       const next = await fetchLeague(id);
       if (league?.id !== id) return;
       if (writes.length) { missedRemote = true; return; }
-      db = next; rerender();
+      db = next; offlineData = null; updateSyncBadge();
+      saveSnapshot(id, next);
+      rerender();
     } catch {}
   }, 400);
 }
@@ -603,8 +667,10 @@ const saveEvent = (g, e) => persist({ upsert: 'events', rows: [eventRow(g, e)] }
 
 function updateSyncBadge() {
   const el = document.getElementById('sync');
-  el.textContent = offline ? `Offline · ${writes.length} change${writes.length === 1 ? '' : 's'} saved on this device, waiting to send` : '';
-  el.classList.toggle('show', offline && writes.length > 0);
+  el.textContent = offline && writes.length
+    ? `Offline · ${writes.length} change${writes.length === 1 ? '' : 's'} saved on this device, waiting to send`
+    : offlineData ? `Offline · showing data saved ${timeAgo(offlineData)}` : '';
+  el.classList.toggle('show', !!el.textContent);
 }
 
 let toastTimer;
@@ -643,8 +709,10 @@ function subscribeLeague(id) {
   on('DELETE', 'teams', p => { if (team(p.old.id)) refreshLeague(); }, null);
   on('DELETE', 'players', p => { if (db.teams.some(t => t.players.some(x => x.id === p.old.id))) refreshLeague(); }, null);
   if (db.seasonsReady) {  // only once the seasons tables exist
-    on('*', 'seasons', refreshLeague);
-    on('*', 'hall_of_fame', refreshLeague);
+    on('INSERT', 'seasons', p => remoteSeason(p.new));
+    on('UPDATE', 'seasons', refreshLeague);
+    on('INSERT', 'hall_of_fame', p => remoteHof(p.new));
+    on('DELETE', 'hall_of_fame', p => { if (db.hof.some(h => h.id === p.old.id)) refreshLeague(); }, null);
   }
   if (db.claimsReady) {   // only once the claims table exists
     on('INSERT', 'player_claims', p => remoteClaim(p.new));
@@ -676,9 +744,9 @@ function remoteClaim(c) {
   const p = player(c.player_id);
   // Notifications: admins hear about new requests; the person claiming hears the decision.
   if (!before && c.status === 'pending' && isAdmin() && c.user_id !== me())
-    toast(`🔔 ${c.user_email || 'Someone'} wants to claim ${p.name}. Approve it on the Games page.`);
+    notify(`🙋 ${c.user_email || 'Someone'} wants to claim ${p.name}`, '#/games');
   if (before?.status === 'pending' && c.user_id === me() && c.status !== 'pending')
-    toast(c.status === 'approved' ? `✅ You’re now linked to ${p.name}!` : `Your claim for ${p.name} was denied.`);
+    notify(c.status === 'approved' ? `✅ You’re now linked to ${p.name}!` : `Your claim for ${p.name} was denied`, `#/profile/${c.player_id}`);
   rerender();
 }
 
@@ -688,11 +756,26 @@ function remoteGame(r) {
     const same = JSON.stringify(gameRow(g)) === JSON.stringify(gameRow({ ...next }));
     if (same) return;                                      // our own change coming back
     if (writes.length) { missedRemote = true; return; }    // our newer changes are still saving; re-sync after
+    const was = g.status;
     Object.assign(g, next, { events: g.events });
+    // Someone else started or finished a game.
+    const h = team(g.homeId), a = team(g.awayId);
+    if (h && a && was !== 'live' && g.status === 'live') notify(`🟢 Live now: ${h.name} vs ${a.name}`, `#/box/${g.id}`);
+    if (h && a && was === 'live' && g.status === 'final') notify(`🏁 Final: ${h.name} ${score(g, h.id)}–${score(g, a.id)} ${a.name}`, `#/box/${g.id}`);
   } else {
     db.games.push(next);
   }
   rerender();
+}
+
+// New seasons and Hall of Fame inductions (from another device).
+function remoteSeason(s) {
+  if (!db.seasons.some(x => x.id === s.id) && s.status === 'active') notify(`🏁 ${s.name} has started`, '#/games');
+  refreshLeague();
+}
+function remoteHof(h) {
+  if (!db.hof.some(x => x.id === h.id)) notify(`🏆 ${h.name} was inducted into the Hall of Fame`, '#/hof');
+  refreshLeague();
 }
 
 function remoteDelete(kind, id) {
@@ -779,14 +862,16 @@ function route() {
   if (recovering) return renderNewPassword();
   if (!session) return renderLogin();
   const [page, id] = location.hash.replace(/^#\/?/, '').split('/');
-  const inLeague = !!(league && mode) && ['games', 'game', 'box', 'leaders', 'teams', 'schedule', 'settings', 'profile', 'team', 'hof'].includes(page);
+  const inLeague = !!(league && mode) && ['games', 'game', 'box', 'leaders', 'teams', 'schedule', 'settings', 'profile', 'team', 'hof', 'standings', 'playoffs'].includes(page);
+  updateBell();
   document.body.classList.toggle('no-nav', !inLeague);
   document.body.classList.toggle('player', !isAdmin());
   document.getElementById('modeTag').textContent = inLeague ? (isAdmin() ? 'Admin' : 'Player') : '';
   document.querySelectorAll('[data-nav]').forEach(a =>
     a.classList.toggle('on', (a.dataset.nav === 'games' && ['games', 'game', 'box', 'schedule', 'settings'].includes(page))
       || (a.dataset.nav === 'teams' && (page === 'profile' || page === 'team'))
-      || (a.dataset.nav === 'leaders' && page === 'hof') || a.dataset.nav === page));
+      || (a.dataset.nav === 'leaders' && page === 'hof') || (a.dataset.nav === 'standings' && page === 'playoffs')
+      || a.dataset.nav === page));
   if (page === 'admin') return id === 'create' ? renderCreateLeague() : renderAdminHome();
   if (page === 'player') return renderPlayerHome();
   if (!inLeague) return renderMenu();
@@ -807,6 +892,8 @@ function route() {
   if (page === 'profile') return renderProfile(id);
   if (page === 'team') return renderTeamPage(id);
   if (page === 'hof') return renderHallOfFame();
+  if (page === 'standings') return renderStandings();
+  if (page === 'playoffs') return renderPlayoffs();
   if (page === 'schedule' && isAdmin()) return renderSchedule();
   if (page === 'settings' && isAdmin()) return renderSettings();
   renderGames();
@@ -829,11 +916,34 @@ function renderMenu() {
         <span><b>League Admin</b><span class="muted">Create or join a league, track live games and manage rosters.</span></span>
       </a>
     </div>
+    ${installCard()}
     <h2>Account</h2>
     <div class="card row">
       <span class="muted">Signed in as <b>${esc(session.user.email)}</b></span>
       <button class="small" onclick="signOut()">Sign out</button>
     </div>`;
+}
+
+// ----- Installing the app -----
+let installPrompt = null;   // Android / desktop Chrome hand us this when the app can be installed
+window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installPrompt = e; if (!location.hash.replace(/^#\/?/, '')) route(); });
+window.addEventListener('appinstalled', () => { installPrompt = null; toast('Installed! Open Frisbee Stats from your home screen.'); });
+const isInstalled = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+const isIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent);
+
+function installCard() {
+  if (isInstalled()) return '';
+  if (installPrompt) return `<button class="card game-link install" onclick="installApp()">
+    <span><b>📲 Install the app</b><br><span class="muted">Opens from your home screen, works with no signal, and can send phone alerts.</span></span><span class="muted">→</span></button>`;
+  if (isIOS()) return `<div class="card install"><b>📲 Add to your home screen</b>
+    <div class="muted">In Safari, tap <b>Share</b> (the square with an arrow), then <b>Add to Home Screen</b>. It then opens like an app, works with no signal, and can send alerts.</div></div>`;
+  return '';
+}
+async function installApp() {
+  if (!installPrompt) return;
+  installPrompt.prompt();
+  await installPrompt.userChoice;
+  installPrompt = null; route();
 }
 
 function enterLeague(l, m) {
@@ -1060,7 +1170,8 @@ function gameCard(g) {
   const info = `<div>
       <div><span class="dot" style="background:${h.color}"></span>${esc(h.name)} ${upcoming ? '' : `<b>${score(g, h.id)}</b>`}</div>
       <div><span class="dot" style="background:${a.color}"></span>${esc(a.name)} ${upcoming ? '' : `<b>${score(g, a.id)}</b>`}</div>
-      <div class="muted">${upcoming ? `${fmtWhen(g.when)} · Field ${g.field} · Round ${g.round}` : new Date(g.created).toLocaleDateString()}</div>
+      <div class="muted">${g.stage === 'playoff' ? `🏆 Playoffs · ${roundName(g.round, Math.log2(db.seasons.find(s => s.id === g.seasonId)?.playoffs?.size || 2))}${upcoming ? '' : ' · '}` : ''}${upcoming
+        ? (g.stage === 'playoff' ? '' : `${fmtWhen(g.when)} · Field ${g.field} · Round ${g.round}`) : new Date(g.created).toLocaleDateString()}</div>
     </div>`;
   if (upcoming) return `<div class="card game-link">${info}${canEdit()
     ? `<button class="small primary" onclick="startScheduled('${g.id}')">Start</button>`
@@ -2057,6 +2168,7 @@ function endGame() {
   if (!confirm('End this game and mark it final?')) return;
   const g = game(ui.gameId);
   g.status = 'final'; saveGame(g);
+  if (g.stage === 'playoff') advanceBracket();   // the winner moves on
   location.hash = `#/box/${ui.gameId}`;
 }
 
@@ -2644,6 +2756,8 @@ function renderSetup() {
 
 if (sb) {
   // Fires once on load with any saved session, then on every sign in / sign out.
+  // Installable app: keep the app's files for offline use (needs https, or localhost for testing).
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
   let restoredFor = null;
   sb.auth.onAuthStateChange((event, s) => {
     session = s; authReady = true;
