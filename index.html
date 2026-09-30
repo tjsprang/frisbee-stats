@@ -171,6 +171,78 @@
     animation: pulse 1.4s ease-in-out infinite; vertical-align: middle; }
   @keyframes pulse { 50% { opacity: .3; } }
 
+  /* Chart colours: the first slots of a colourblind-validated palette, with their own dark-mode steps */
+  :root { --series-1: #2a78d6; --series-2: #eb6834; --grid: #e1e0d9; --axis: #c3c2b7; --ink-muted: #898781; }
+  @media (prefers-color-scheme: dark) {
+    :root { --series-1: #3987e5; --series-2: #d95926; --grid: #2c2c2a; --axis: #383835; }
+  }
+
+  /* Pass-by-pass tracker */
+  .phase-head { font-size: 18px; font-weight: 800; margin: 4px 0 10px; }
+  .phase .tabs button { font-size: 16px; padding: 16px 10px; }
+  .holder { font-size: 17px; border-left: 6px solid var(--team); }
+  .play-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 14px 0 4px; }
+  .play-actions button { padding: 16px 10px; font-size: 16px; }
+  .play-actions .goal { background: var(--good); color: #fff; border: 0; }
+  .play-actions .to { background: var(--bad); color: #fff; border: 0; }
+  .tag.pass, .tag.pickup { color: var(--muted); }
+  .tag.pull { color: var(--d); }
+  .tag.stall { color: var(--bad); }
+
+  /* Stat categories, tiles and game pages */
+  .cat-tabs { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; margin: 4px 0 10px; }
+  .cat-tabs button { flex: 0 0 auto; padding: 7px 12px; font-size: 14px; border-radius: 99px; white-space: nowrap; }
+  .cat-tabs button.on { background: var(--text); color: var(--bg); border-color: transparent; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin-bottom: 12px; }
+  .tile { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; display: flex; flex-direction: column; gap: 2px; }
+  .tile-label { font-size: 13px; color: var(--muted); }
+  .tile b { font-size: 26px; font-weight: 700; }
+  .tile-note { font-size: 12px; color: var(--muted); }
+  .leaders-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+  .leaders-list div { display: flex; flex-direction: column; font-size: 14px; }
+  .point-row { padding: 10px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
+  .point-row:last-child { border-bottom: 0; }
+  .point-head { display: flex; gap: 8px; align-items: center; margin-bottom: 2px; }
+  .point-head b { flex: 1; }
+  .on-field { font-size: 12px; margin-top: 4px; }
+  .foot { font-size: 12px; }
+  th[title] { text-decoration: underline dotted; text-underline-offset: 3px; }
+
+  /* Charts */
+  .chart { overflow: hidden; }
+  .chart svg { display: block; margin-top: 8px; overflow: visible; }
+  .chart-title { font-weight: 700; margin-bottom: 4px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 13px; color: var(--muted); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .swatch { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+  .swatch.series-1 { background: var(--series-1); } .swatch.series-2 { background: var(--series-2); }
+  .chart .grid { stroke: var(--grid); stroke-width: 1; }
+  .chart .axis { stroke: var(--axis); stroke-width: 1; }
+  .chart .guide { stroke: var(--axis); stroke-width: 1; }
+  .chart .tick { fill: var(--ink-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .chart .end-label, .chart .node-label { fill: var(--text); font-size: 12px; font-weight: 600; }
+  .chart .in-label { fill: #fff; font-size: 12px; font-weight: 700; pointer-events: none; }
+  .chart .line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+  .chart .line.series-1 { stroke: var(--series-1); } .chart .line.series-2 { stroke: var(--series-2); }
+  .chart .dot { stroke: var(--card); stroke-width: 2; }
+  .chart .dot.series-1, .chart .bar.series-1, .chart .node { fill: var(--series-1); }
+  .chart .dot.series-2, .chart .bar.series-2 { fill: var(--series-2); }
+  .chart .hit { fill: transparent; cursor: pointer; outline: none; }
+  .chart .flow { fill: none; stroke: var(--ink-muted); stroke-opacity: .28; cursor: pointer; outline: none; }
+  .chart .flow.lit { stroke: var(--series-1); stroke-opacity: .6; }
+  .chart .node { cursor: pointer; outline: none; }
+  /* Keyboard focus on a mark shows its tooltip (and guide line) rather than an outline that could be mistaken for data. */
+  #chart-tip { position: fixed; z-index: 30; display: none; pointer-events: none; white-space: pre-line;
+    background: var(--text); color: var(--bg); font-size: 13px; padding: 7px 10px; border-radius: 8px; max-width: 260px; }
+  #chart-tip.show { display: block; }
+  .table-twin { margin-top: 8px; font-size: 13px; }
+  .table-twin summary { color: var(--muted); cursor: pointer; }
+  .hbar { display: grid; grid-template-columns: minmax(70px, 30%) 1fr 28px; gap: 8px; align-items: center; font-size: 14px; padding: 4px 0; }
+  .hbar-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .hbar-track { height: 12px; }
+  .hbar-track i { display: block; height: 100%; min-width: 4px; background: var(--series-1); border-radius: 0 4px 4px 0; }
+  .hbar-val { text-align: right; font-variant-numeric: tabular-nums; }
+
   /* Leaders: All / Teams */
   .leader-tabs button.on { background: var(--accent); color: var(--accent-text); border-color: transparent; }
   .team-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
@@ -193,6 +265,7 @@
   .stepper button { width: 52px; height: 52px; font-size: 24px; padding: 0; }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="stats.js"></script>
 </head>
 <body>
 <header>
@@ -250,7 +323,7 @@ function seed() {
   };
 }
 
-const emptyDb = () => ({ teams: [], games: [], settings: { onField: 7 }, claims: [], claimsReady: false });
+const emptyDb = () => ({ teams: [], games: [], settings: { onField: 7 }, claims: [], claimsReady: false, passReady: false });
 let db = emptyDb();
 let dataLeagueId = null;   // which league `db` currently holds
 let loading = null, loadError = null, channel = null;
@@ -262,11 +335,13 @@ function rememberLeague() {
 // Supabase rows ⇄ the shapes the screens use.
 const toGame = r => ({
   id: r.id, homeId: r.home_id, awayId: r.away_id, status: r.status, created: Number(r.created_ms),
-  when: r.scheduled_at, field: r.field, round: r.round, lineup: r.lineup, pointPlayers: r.point_players, events: []
+  when: r.scheduled_at, field: r.field, round: r.round, lineup: r.lineup, pointPlayers: r.point_players,
+  firstPull: r.first_pull || null, events: []
 });
 const toEvent = r => ({
   id: r.id, t: Number(r.t), type: r.type, teamId: r.team_id, playerId: r.player_id,
-  ...(r.assist_id ? { assistId: r.assist_id } : {}), ...(r.played ? { played: r.played } : {})
+  ...(r.assist_id ? { assistId: r.assist_id } : {}), ...(r.target_id ? { targetId: r.target_id } : {}),
+  ...(r.played ? { played: r.played } : {}), ...(r.detail ? { detail: r.detail } : {})
 });
 const teamRow = t => ({ id: t.id, league_id: league.id, name: t.name, color: t.color });
 const playerRows = t => t.players.map((p, i) => ({
@@ -275,32 +350,36 @@ const playerRows = t => t.players.map((p, i) => ({
 const gameRow = g => ({
   id: g.id, league_id: league.id, home_id: g.homeId, away_id: g.awayId, status: g.status, created_ms: g.created,
   scheduled_at: g.when || null, field: g.field ?? null, round: g.round ?? null,
-  lineup: g.lineup || null, point_players: g.pointPlayers || null
+  lineup: g.lineup || null, point_players: g.pointPlayers || null,
+  ...(db.passReady ? { first_pull: g.firstPull || null } : {})   // column added by supabase/005
 });
 const eventRow = (g, e) => ({
   id: e.id, league_id: league.id, game_id: g.id, t: e.t, type: e.type, team_id: e.teamId || null,
-  player_id: e.playerId || null, assist_id: e.assistId || null, played: e.played || null
+  player_id: e.playerId || null, assist_id: e.assistId || null, played: e.played || null,
+  ...(db.passReady ? { target_id: e.targetId || null, detail: e.detail || null } : {})
 });
 
-// Supabase returns at most 1000 rows per request, so page through.
-async function fetchAll(makeQuery) {
-  const rows = [];
-  for (let from = 0; ; from += 1000) {
-    const { data, error } = await makeQuery().range(from, from + 999);
-    if (error) throw error;
-    rows.push(...data);
-    if (data.length < 1000) return rows;
-  }
+// All of a league's rows from one table. Supabase returns at most 1000 rows per request,
+// so fetch the first page (with a total count), then the rest in parallel.
+async function fetchAll(table, leagueId, orders) {
+  const query = () => orders.reduce((q, o) => q.order(o), sb.from(table).select('*', { count: 'exact' }).eq('league_id', leagueId));
+  const first = await query().range(0, 999);
+  if (first.error) throw first.error;
+  const pages = Math.ceil((first.count || 0) / 1000);
+  const rest = await Promise.all(Array.from({ length: Math.max(0, pages - 1) }, (_, i) => query().range((i + 1) * 1000, (i + 2) * 1000 - 1)));
+  for (const r of rest) if (r.error) throw r.error;
+  return [first, ...rest].flatMap(r => r.data);
 }
 
 async function fetchLeague(id) {
-  const [lg, teams, players, games, events] = await Promise.all([
+  const [lg, teams, players, games, events, passProbe] = await Promise.all([
     sb.from('leagues').select('name, border_colors, on_field').eq('id', id).single()
       .then(r => { if (r.error) throw r.error; return r.data; }),
-    fetchAll(() => sb.from('teams').select('*').eq('league_id', id).order('created_at').order('id')),
-    fetchAll(() => sb.from('players').select('*').eq('league_id', id).order('sort').order('id')),
-    fetchAll(() => sb.from('games').select('*').eq('league_id', id).order('id')),
-    fetchAll(() => sb.from('events').select('*').eq('league_id', id).order('seq'))
+    fetchAll('teams', id, ['created_at', 'id']),
+    fetchAll('players', id, ['sort', 'id']),
+    fetchAll('games', id, ['id']),
+    fetchAll('events', id, ['seq']),
+    sb.from('games').select('first_pull').limit(1)   // fails until supabase/005 has been run
   ]);
   const claims = await fetchClaims(id);
   const next = {
@@ -308,7 +387,8 @@ async function fetchLeague(id) {
     games: games.map(toGame),
     settings: { onField: lg.on_field },
     claims: claims || [],
-    claimsReady: !!claims   // false until supabase/004_player_claims.sql has been run
+    claimsReady: !!claims,           // false until supabase/004_player_claims.sql has been run
+    passReady: !passProbe.error      // false until supabase/005_pass_by_pass.sql has been run
   };
   for (const p of players) next.teams.find(t => t.id === p.team_id)?.players.push({ id: p.id, name: p.name, number: p.number, userId: p.user_id || null });
   const byId = Object.fromEntries(next.games.map(g => [g.id, g]));
@@ -555,25 +635,12 @@ function player(id) {
 const pname = id => { const p = player(id); return `${p.name}${p.number !== '' ? ' #' + p.number : ''}`; };
 const score = (g, tid) => g.events.filter(e => e.teamId === tid && (e.type === 'goal' || e.type === 'callahan')).length;
 
-// Tally per-player stats from a list of events.
-function tally(events) {
-  const s = {};
-  const get = id => s[id] || (s[id] = { g: 0, a: 0, d: 0, to: 0, c: 0, pp: 0 });
-  for (const e of events) {
-    if (!e.playerId) continue; // e.g. the halftime marker
-    // Point-ending events carry who was on the field for each team (see pointSnapshot).
-    if (e.played) for (const ids of Object.values(e.played)) for (const id of ids) get(id).pp++;
-    const p = get(e.playerId);
-    if (e.type === 'goal') { p.g++; if (e.assistId) get(e.assistId).a++; }
-    if (e.type === 'callahan') { p.g++; p.d++; p.c++; }
-    if (e.type === 'd') p.d++;
-    if (e.type === 'throwaway' || e.type === 'drop') p.to++;
-  }
-  for (const id in s) s[id].pm = s[id].g + s[id].a + s[id].d - s[id].to;
-  return s;
-}
+// Player and team stats are worked out by analyze() in stats.js.
 
-const LABEL = { goal: 'Goal', d: 'D', throwaway: 'Throwaway', drop: 'Drop', callahan: 'Callahan', half: 'Halftime' };
+const LABEL = {
+  goal: 'Goal', d: 'D', throwaway: 'Throwaway', drop: 'Drop', callahan: 'Callahan', half: 'Halftime',
+  pull: 'Pull', pickup: 'Pickup', pass: 'Pass', stall: 'Stall'
+};
 
 // Halftime is stored as a 'half' event in the play-by-play (no player attached).
 // Returns the score at halftime, or null if the game hasn't reached it.
@@ -596,13 +663,13 @@ function route() {
   if (recovering) return renderNewPassword();
   if (!session) return renderLogin();
   const [page, id] = location.hash.replace(/^#\/?/, '').split('/');
-  const inLeague = !!(league && mode) && ['games', 'game', 'box', 'leaders', 'teams', 'schedule', 'settings', 'profile'].includes(page);
+  const inLeague = !!(league && mode) && ['games', 'game', 'box', 'leaders', 'teams', 'schedule', 'settings', 'profile', 'team'].includes(page);
   document.body.classList.toggle('no-nav', !inLeague);
   document.body.classList.toggle('player', !isAdmin());
   document.getElementById('modeTag').textContent = inLeague ? (isAdmin() ? 'Admin' : 'Player') : '';
   document.querySelectorAll('[data-nav]').forEach(a =>
     a.classList.toggle('on', (a.dataset.nav === 'games' && ['games', 'game', 'box', 'schedule', 'settings'].includes(page))
-      || (a.dataset.nav === 'teams' && page === 'profile') || a.dataset.nav === page));
+      || (a.dataset.nav === 'teams' && (page === 'profile' || page === 'team')) || a.dataset.nav === page));
   if (page === 'admin') return id === 'create' ? renderCreateLeague() : renderAdminHome();
   if (page === 'player') return renderPlayerHome();
   if (!inLeague) return renderMenu();
@@ -621,6 +688,7 @@ function route() {
   if (page === 'leaders') return renderLeaders();
   if (page === 'teams') return isAdmin() ? renderTeams() : renderRosters();
   if (page === 'profile') return renderProfile(id);
+  if (page === 'team') return renderTeamPage(id);
   if (page === 'schedule' && isAdmin()) return renderSchedule();
   if (page === 'settings' && isAdmin()) return renderSettings();
   renderGames();
@@ -966,7 +1034,7 @@ function myStatsCard() {
   if (!db.claimsReady) return '';
   const mine = myPlayer(), pending = myPendingClaim();
   if (mine) {
-    const s = { pp: 0, g: 0, a: 0, d: 0, to: 0, pm: 0, ...tally(db.games.flatMap(g => g.events))[mine.id] };
+    const s = statsOf(analyze(db.games), mine.id);
     return `<a class="card game-link" href="#/profile/${mine.id}">
       <span><span class="muted">Your stats · #${esc(mine.number)} ${esc(mine.name)}</span><br>
         <b>${s.g} G · ${s.a} A · ${s.d} D · ${s.to} TO</b> <span class="muted">· ${s.pm >= 0 ? '+' : ''}${s.pm}</span></span>
@@ -1026,7 +1094,7 @@ function renderRosters() {
     ${db.teams.length ? '' : '<p class="muted">No teams yet.</p>'}
     ${db.teams.map(t => `
       <div class="card">
-        <h2 style="margin-top:0"><span class="dot" style="background:${esc(t.color)}"></span>${esc(t.name)}</h2>
+        <h2 style="margin-top:0"><a href="#/team/${t.id}" style="color:inherit"><span class="dot" style="background:${esc(t.color)}"></span>${esc(t.name)}</a></h2>
         ${t.players.length ? `<ul class="roster">${t.players.map(p => `
           <li><a href="#/profile/${p.id}" style="color:inherit;text-decoration:none"><span class="muted">#${esc(p.number)}</span> ${esc(p.name)}</a>
             <span class="row" style="flex:0 0 auto">${
@@ -1044,28 +1112,45 @@ function renderProfile(pid) {
   const t = teamOf(pid);
   if (!t) { location.hash = '#/teams'; return; }
   const p = t.players.find(x => x.id === pid);
-  const zero = { pp: 0, g: 0, a: 0, d: 0, to: 0, c: 0, pm: 0 };
   const played = db.games.filter(g => g.status !== 'scheduled' && (g.homeId === t.id || g.awayId === t.id))
     .sort((a, b) => b.created - a.created);
-  const season = { ...zero, ...tally(played.flatMap(g => g.events))[pid] };
+  const an = analyze(played), s = statsOf(an, pid);
+  const signed = v => (v > 0 ? `+${v}` : `${v}`);
   const rows = played.map(g => {
     const opp = team(g.homeId === t.id ? g.awayId : g.homeId), us = score(g, t.id), them = score(g, opp.id);
-    return { gm: g, opp, result: `${g.status === 'live' ? 'LIVE ' : us > them ? 'W ' : us < them ? 'L ' : 'T '}${us}–${them}`, ...zero, ...tally(g.events)[pid] };
+    return { gm: g, opp, name: opp.name, result: `${g.status === 'live' ? 'LIVE ' : us > them ? 'W ' : us < them ? 'L ' : 'T '}${us}–${them}`, ...statsOf(analyze([g]), pid) };
   });
+  // Who they throw to most, and who throws to them most.
+  const top = (list, n = 5) => Object.entries(list.reduce((m, id) => ({ ...m, [id]: (m[id] || 0) + 1 }), {}))
+    .sort((x, y) => y[1] - x[1]).slice(0, n);
+  const throwsTo = top(an.passes.filter(([from]) => from === pid).map(([, to]) => to));
+  const catchesFrom = top(an.passes.filter(([, to]) => to === pid).map(([from]) => from));
+  const barList = (title, list, verb) => list.length ? `<div class="card chart"><div class="chart-title">${title}</div>
+    ${list.map(([id, n]) => `<div class="hbar"><span class="hbar-name">${esc(player(id).name)}</span>
+      <span class="hbar-track"><i style="width:${(n / list[0][1]) * 100}%"></i></span><span class="hbar-val">${n}</span></div>`).join('')}
+    <div class="muted" style="font-size:12px;margin-top:6px">Completed passes ${verb}, including goals.</div></div>` : '';
+
   app.innerHTML = `
     <div class="row"><h1>#${esc(p.number)} ${esc(p.name)}</h1>
       ${p.userId === me() ? '<span class="badge you" style="flex:0 0 auto">YOU</span>' : ''}</div>
-    <p class="muted"><span class="dot" style="background:${esc(t.color)}"></span>${esc(t.name)} · ${played.length} game${played.length === 1 ? '' : 's'}</p>
-    <div class="card stat-grid">
-      ${[['Goals', season.g], ['Assists', season.a], ['Ds', season.d], ['Turnovers', season.to], ['Points played', season.pp], ['+/-', (season.pm > 0 ? '+' : '') + season.pm]]
-        .map(([k, v]) => `<div><b>${v}</b><span class="muted">${k}</span></div>`).join('')}
-    </div>
+    <p class="muted"><a href="#/team/${t.id}" style="color:inherit"><span class="dot" style="background:${esc(t.color)}"></span>${esc(t.name)}</a>
+      · ${played.length} game${played.length === 1 ? '' : 's'}</p>
+    <h2>Offense</h2>
+    ${tiles([['Goals', s.g], ['Assists', s.a], ['Hockey assists', s.ha], ['Touches', s.tou]])}
+    <h2>Passing and receiving</h2>
+    ${tiles([['Throws', s.th], ['Throw %', fmtPct(s.thp), `${s.taT} throwaways, ${s.stT} stalls`], ['Catches', s.ca], ['Catch %', fmtPct(s.cp), `${s.drT} drops`]])}
+    <h2>Defense</h2>
+    ${tiles([['Ds', s.d], ['Callahans', s.c], ['Pulls', s.pu, s.pob ? `${s.pob} out of bounds` : '']])}
+    <h2>Playing time</h2>
+    ${tiles([['Points played', s.pp, `${s.op} O · ${s.dp} D`], ['Minutes', fmtInt(s.min)], ['Plus/minus', signed(s.pm)],
+      ['O / D efficiency', `${fmtDec(s.oe)} / ${fmtDec(s.de)}`, 'Per O-line / D-line point']])}
+    ${barList('Throws to', throwsTo, 'thrown to each teammate')}
+    ${barList('Catches from', catchesFrom, 'caught from each teammate')}
     <h2>Game by game</h2>
-    ${rows.length ? `<div class="card">${statTable(rows, [
-      { k: 'opp', h: 'Game', l: true, f: r => `<a href="#/box/${r.gm.id}">vs ${esc(r.opp.name)}</a>
-        <div class="muted" style="font-size:12px">${esc(r.result)} · ${new Date(r.gm.created).toLocaleDateString()}</div>` },
-      { k: 'pp', h: 'PP' }, { k: 'g', h: 'G' }, { k: 'a', h: 'A' }, { k: 'd', h: 'D' }, { k: 'to', h: 'TO' }, { k: 'pm', h: '+/-' }
-    ])}</div>` : '<p class="muted">No games played yet.</p>'}`;
+    ${rows.length ? `${statCatTabs('route()')}<div class="card">${statTable(rows, statCols(
+      { k: 'name', h: 'Game', l: true, f: r => `<a href="#/box/${r.gm.id}">vs ${esc(r.opp.name)}</a>
+        <div class="muted" style="font-size:12px">${esc(r.result)} · ${new Date(r.gm.created).toLocaleDateString()}</div>` }))}</div>
+      ${statFootnote}` : '<p class="muted">No games played yet.</p>'}`;
 }
 
 // ---------- League settings ----------
@@ -1294,13 +1379,21 @@ function playLog(g, limit, emptyText) {
   const recent = g.events.slice(-limit).reverse(), half = halftimeScore(g);
   const mins = e => `${Math.max(0, Math.floor((e.t - g.created) / 60000))}'`;
   if (!recent.length) return `<div class="muted">${emptyText}</div>`;
+  const who = id => (id ? esc(pname(id)) : '<span class="muted">unknown</span>');
+  const detail = e => {
+    switch (e.type) {
+      case 'pass': return `${who(e.playerId)} <span class="muted">→</span> ${who(e.targetId)}`;
+      case 'pull': return `${who(e.playerId)}${e.detail?.ob ? ' <span class="muted">(out of bounds)</span>' : ''}`;
+      case 'goal': case 'drop': return `${who(e.playerId)}${e.assistId ? ` <span class="muted">from ${who(e.assistId)}</span>` : ''}`;
+      default: return who(e.playerId);
+    }
+  };
   return `<ul class="log">${recent.map(e => e.type === 'half' ? `
     <li><span class="time">${mins(e)}</span>
       <span><span class="tag half">Halftime</span> ${half[0]}–${half[1]}</span></li>` : `
     <li><span class="time">${mins(e)}</span>
       <span><span class="dot" style="background:${team(e.teamId)?.color || '#888'}"></span>
-      <span class="tag ${e.type}">${LABEL[e.type]}</span> ${esc(pname(e.playerId))}
-      ${e.assistId ? `<span class="muted">from ${esc(pname(e.assistId))}</span>` : ''}</span></li>`).join('')}
+      <span class="tag ${e.type}">${LABEL[e.type]}</span> ${detail(e)}</span></li>`).join('')}
   </ul>`;
 }
 
@@ -1324,18 +1417,93 @@ function pickerButtons(tid, excludeId, onclick) {
     ? `<div class="full muted divider">Bench</div>${bench.map(btn).join('')}` : '');
 }
 
+// Where a game is up to, worked out from its plays (so Undo only has to remove the last play):
+//   choose → nobody has pulled yet;  pull → between points;  pickup → a team needs to pick up the disc;
+//   possession → someone has the disc.
+function gameState(g) {
+  const other = t => (t === g.homeId ? g.awayId : g.homeId);
+  const s = { phase: g.firstPull ? 'pull' : 'choose', pulling: g.firstPull || null, offense: null, holder: null, passes: 0, point: 1 };
+  for (const e of g.events) {
+    switch (e.type) {
+      case 'pull': s.phase = 'pickup'; s.pulling = e.teamId; s.offense = other(e.teamId); s.holder = null; break;
+      case 'pickup': s.phase = 'possession'; s.offense = e.teamId; s.holder = e.playerId; s.passes = 0; break;
+      case 'pass': s.holder = e.targetId; s.passes++; break;
+      case 'throwaway': case 'drop': case 'stall':
+        s.phase = 'pickup'; s.offense = other(e.teamId); s.holder = null; break;
+      case 'goal': case 'callahan':   // the team that scored pulls next
+        s.phase = 'pull'; s.pulling = e.teamId; s.offense = null; s.holder = null; s.point++; break;
+      case 'half':                    // teams swap: whoever received to start the game pulls to start the second half
+        s.phase = 'pull'; s.pulling = g.firstPull ? other(g.firstPull) : s.pulling; s.offense = null; s.holder = null; break;
+    }
+  }
+  s.defense = s.offense ? other(s.offense) : null;
+  if (s.phase === 'pull') s.receiving = other(s.pulling);
+  return s;
+}
+
 function renderTracker(g) {
-  if (ui.gameId !== g.id) { ui.gameId = g.id; ui.teamId = g.homeId; }
-  const h = team(g.homeId), a = team(g.awayId), t = team(ui.teamId);
-  const s = tally(g.events);
-  const half = halftimeScore(g);
-  const roster = splitRoster(g, t.id);
-  const playerBtn = p => {
-    const ps = s[p.id];
-    const line = ps ? `${roster.hasLineup ? `${ps.pp}PP · ` : ''}${ps.g}G ${ps.a}A ${ps.d}D ${ps.to}T` : '—';
-    return `<button class="player" onclick="tapPlayer('${p.id}')">
-      <span class="num">#${esc(p.number)}</span>${esc(p.name)}<span class="line">${line}</span></button>`;
+  ui.gameId = g.id;
+  const h = team(g.homeId), a = team(g.awayId), half = halftimeScore(g);
+  if (!db.passReady) {
+    app.innerHTML = `<h1>${esc(h.name)} vs ${esc(a.name)}</h1>
+      <p class="msg error">Pass-by-pass tracking needs a database update. In Supabase, run <code>supabase/005_pass_by_pass.sql</code> in the SQL Editor, then reload.</p>`;
+    return;
+  }
+  const st = gameState(g), stats = analyze([g]);
+  const showTid = st.phase === 'pull' ? st.pulling : st.offense;
+  if (showTid) ui.teamId = showTid;   // the lineup pop-up opens on this team
+  const btn = onclick => p => {
+    const s = statsOf(stats, p.id);
+    return `<button class="player" onclick="${onclick(p.id)}">
+      <span class="num">#${esc(p.number)}</span>${esc(p.name)}<span class="line">${s.pp}PP · ${s.g}G ${s.a}A ${s.d}D ${s.to}TO</span></button>`;
   };
+  // Players on the field, then `between` (e.g. the Goal/Throwaway buttons), then the bench.
+  const grid = (tid, onclick, excludeId, between = '') => {
+    const r = splitRoster(g, tid, excludeId), t = team(tid);
+    return `<div class="players" style="--team:${t.color}">${r.on.map(btn(onclick)).join('')}</div>${between}
+      ${r.bench.length ? `<div class="muted" style="margin:14px 0 8px">Bench</div>
+        <div class="players bench" style="--team:${t.color}">${r.bench.map(btn(onclick)).join('')}</div>` : ''}`;
+  };
+  const lineupBar = tids => `<div class="row lineup-bar">
+    <span class="muted">${tids.map(tid => { const r = splitRoster(g, tid);
+      return `${esc(team(tid).name)}: <b>${r.hasLineup ? `${r.on.length}/${onFieldMax()}` : 'no lineup'}</b>`; }).join(' · ')}</span>
+    <button class="small" onclick="openLineup()">👥 Lineup</button></div>`;
+  const dot = t => `<span class="dot" style="background:${t.color}"></span>`;
+
+  let panel = '';
+  if (st.phase === 'choose') {
+    panel = `<div class="card phase">
+      <div class="phase-head">Who pulls first?</div>
+      <div class="muted">Set each team’s lineup first if you can. It’s used for points played and O/D stats.</div>
+      <div class="tabs" style="margin-top:12px">${[h, a].map(x =>
+        `<button style="border-color:${x.color}" onclick="setFirstPull('${x.id}')">${dot(x)}${esc(x.name)}</button>`).join('')}</div>
+    </div>${lineupBar([h.id, a.id])}`;
+  } else if (st.phase === 'pull') {
+    const D = team(st.pulling), O = team(st.receiving);
+    panel = `<div class="phase-head">Point ${st.point} · ${dot(D)}${esc(D.name)} pull <span class="muted">to ${esc(O.name)}</span></div>
+      ${lineupBar([D.id, O.id])}
+      <div class="muted" style="margin-bottom:8px">Tap who pulled.</div>
+      ${grid(D.id, id => `pullSheet('${id}')`)}
+      <button class="small" style="margin-top:10px" onclick="pullSheet(null)">Pulled, not sure who</button>`;
+  } else if (st.phase === 'pickup') {
+    const O = team(st.offense);
+    panel = `<div class="phase-head">${dot(O)}${esc(O.name)} have the disc</div>
+      <div class="muted" style="margin-bottom:8px">Tap who picked it up.</div>
+      ${grid(O.id, id => `recordPickup('${id}')`)}`;
+  } else {
+    const O = team(st.offense), holder = player(st.holder);
+    panel = `<div class="holder card" style="--team:${O.color}">
+        🥏 <b>#${esc(holder.number)} ${esc(holder.name)}</b> has the disc
+        <span class="muted">· ${esc(O.name)} · ${st.passes} pass${st.passes === 1 ? '' : 'es'}</span></div>
+      <div class="muted" style="margin-bottom:8px">Tap who caught the pass.</div>
+      ${grid(O.id, id => `recordPass('${id}')`, st.holder, `
+      <div class="play-actions">
+        <button class="goal" onclick="goalSheet()">Goal…</button>
+        <button class="to" onclick="throwawaySheet()">Throwaway…</button>
+        <button class="to" onclick="dropSheet()">Drop…</button>
+        <button onclick="recordStall()">Stall</button>
+      </div>`)}`;
+  }
 
   app.innerHTML = `
     <div class="card scoreboard">
@@ -1346,29 +1514,14 @@ function renderTracker(g) {
       </div>
       <div class="team" style="color:${a.color}">${esc(a.name)}</div>
     </div>
-    <div class="tabs">
-      ${[h, a].map(x => `<button class="${x.id === t.id ? 'on' : ''}"
-        style="border-color:${x.color};${x.id === t.id ? 'background:' + x.color : ''}"
-        onclick="ui.teamId='${x.id}';route()">${esc(x.name)}</button>`).join('')}
-    </div>
-    <div class="row lineup-bar">
-      <span class="muted">${roster.hasLineup
-        ? `On the field: <b>${roster.on.length}/${onFieldMax()}</b>`
-        : 'No lineup set, so the whole roster is shown'}</span>
-      <button class="small" onclick="openLineup()">👥 Lineup</button>
-    </div>
-    <div class="players" style="--team:${t.color}">${roster.on.map(playerBtn).join('')}</div>
-    ${roster.bench.length ? `
-      <div class="muted" style="margin:14px 0 8px">Bench</div>
-      <div class="players bench" style="--team:${t.color}">${roster.bench.map(playerBtn).join('')}</div>` : ''}
+    ${panel}
     <h2>Recent plays</h2>
-    <div class="card">${playLog(g, 8, 'Tap a player to record a play.')}</div>
+    <div class="card">${playLog(g, 6, 'Plays will show up here.')}</div>
     <div class="row">
       <button onclick="undo()" ${g.events.length ? '' : 'disabled'}>↶ Undo</button>
       <a class="btn" href="#/box/${g.id}">Box score</a>
-      ${half
-        ? '<button class="primary" onclick="endGame()">End game</button>'
-        : '<button class="primary" onclick="halftime()">Halftime</button>'}
+      ${!half && st.phase === 'pull' && st.point > 1 ? '<button onclick="halftime()">Halftime</button>' : ''}
+      <button class="primary" onclick="endGame()">End game</button>
     </div>`;
 }
 
@@ -1458,7 +1611,9 @@ function pointSnapshot(g, scoringPlay) {
     const lineup = g.lineup?.[tid];
     if (!lineup) continue;
     const ids = new Set([...(g.pointPlayers?.[tid] || []), ...lineup]);
-    for (const e of plays) if (e.teamId === tid) { ids.add(e.playerId); if (e.assistId) ids.add(e.assistId); }
+    for (const e of plays) if (e.teamId === tid) {
+      for (const id of [e.playerId, e.assistId, e.targetId]) if (id) ids.add(id);
+    }
     played[tid] = [...ids];
   }
   return played;
@@ -1472,92 +1627,157 @@ function halftime() {
   route();
 }
 
-function tapPlayer(pid) {
-  ui.playerId = pid;
-  openSheet(`
-    <h3>${esc(pname(pid))}</h3>
-    <div class="actions">
-      <button class="goal full" onclick="pickAssist()">Goal</button>
-      <button class="d" onclick="record('d')">D (block)</button>
-      <button class="d" onclick="record('callahan')">Callahan</button>
-      <button class="to" onclick="record('throwaway')">Throwaway</button>
-      <button class="to" onclick="record('drop')">Drop</button>
-      <button class="full" onclick="closeSheet()">Cancel</button>
-    </div>`);
-}
-
-function pickAssist() {
-  openSheet(`
-    <h3>Who threw the goal to ${esc(player(ui.playerId).name)}?</h3>
-    <div class="actions">
-      ${pickerButtons(ui.teamId, ui.playerId, id => `record('goal','${id}')`)}
-      <button class="full" onclick="record('goal')">None</button>
-      <button class="full" onclick="closeSheet()">Cancel</button>
-    </div>`);
-}
-
-const otherTeam = tid => { const g = game(ui.gameId); return tid === g.homeId ? g.awayId : g.homeId; };
-
-function addEvent(type, extra = {}) {
-  const g = game(ui.gameId), e = { id: uid(), t: Date.now(), teamId: ui.teamId, playerId: ui.playerId, type, ...extra };
+// ----- Recording plays -----
+// Plays recorded together (a throwaway and its block) share a group id, so one Undo removes both.
+function play(type, fields = {}) {
+  const g = game(ui.gameId), e = { id: uid(), t: Date.now(), type, ...fields };
   g.events.push(e); saveEvent(g, e);
+  return e;
 }
+const stateNow = () => gameState(game(ui.gameId));
 
-function record(type, assistId) {
-  const extra = assistId ? { assistId } : {};
-  if (type === 'goal' || type === 'callahan') {
-    const g = game(ui.gameId);
-    extra.played = pointSnapshot(g, { teamId: ui.teamId, playerId: ui.playerId, assistId });
-    // The next point starts with whoever is in the lineup now.
-    g.pointPlayers = { [g.homeId]: [...(g.lineup?.[g.homeId] || [])], [g.awayId]: [...(g.lineup?.[g.awayId] || [])] };
-    addEvent(type, extra);
-    saveGame(g);
-  } else {
-    addEvent(type, extra);
-  }
-  if (type === 'throwaway') return askBlock();
-  // After a score the other team receives the pull, and after a drop they pick up the disc,
-  // so show their roster next.
-  if (type === 'goal' || type === 'callahan' || type === 'drop') ui.teamId = otherTeam(ui.teamId);
-  route();
-}
-
-// After a throwaway: was it blocked? Either way the other team has the disc next.
-function askBlock() {
-  route(); // show the throwaway in the play list behind the pop-up
-  openSheet(`
-    <h3>Throwaway by ${esc(player(ui.playerId).name)}. Was it blocked?</h3>
-    <div class="actions">
-      <button class="d" onclick="pickBlocker()">Yes</button>
-      <button onclick="noBlock()">No</button>
-    </div>`);
-}
-
-function noBlock() { ui.teamId = otherTeam(ui.teamId); route(); }
-
-function pickBlocker() {
-  const opp = team(otherTeam(ui.teamId));
-  openSheet(`
-    <h3>Who got the block for ${esc(opp.name)}?</h3>
-    <div class="actions">
-      ${pickerButtons(opp.id, null, id => `recordBlock('${id}')`)}
-      <button class="full" onclick="askBlock()">← Back</button>
-    </div>`);
-}
-
-function recordBlock(pid) {
-  ui.teamId = otherTeam(ui.teamId); ui.playerId = pid;
-  addEvent('d');
-  route();
-}
-
-function undo() {
+function setFirstPull(tid) {
   const g = game(ui.gameId);
-  const e = g.events[g.events.length - 1];
-  if (!e || !confirm(e.type === 'half' ? 'Undo halftime?' : `Undo "${LABEL[e.type]} – ${pname(e.playerId)}"?`)) return;
-  g.events.pop();
-  persist(() => sb.from('events').delete().eq('id', e.id));
-  if (e.played) { g.pointPlayers = e.played; saveGame(g); } // back in the point that goal ended
+  g.firstPull = tid; saveGame(g); route();
+}
+
+function pullSheet(pid) {
+  openSheet(`
+    <h3>Pull${pid ? ` by ${esc(pname(pid))}` : ''}</h3>
+    <div class="actions">
+      <button class="goal" onclick="recordPull(${pid ? `'${pid}'` : 'null'}, false)">In bounds</button>
+      <button class="to" onclick="recordPull(${pid ? `'${pid}'` : 'null'}, true)">Out of bounds</button>
+      <button class="full" onclick="closeSheet()">Cancel</button>
+    </div>`);
+}
+
+function recordPull(pid, ob) {
+  play('pull', { teamId: stateNow().pulling, playerId: pid, ...(ob ? { detail: { ob: true } } : {}) });
+  route();
+}
+
+function recordPickup(pid) { play('pickup', { teamId: stateNow().offense, playerId: pid }); route(); }
+
+function recordPass(pid) {
+  const st = stateNow();
+  play('pass', { teamId: st.offense, playerId: st.holder, targetId: pid });
+  route();
+}
+
+// A goal or callahan ends the point: note who played it, and start the next point with the current lineup.
+function endPoint(type, fields) {
+  const g = game(ui.gameId);
+  fields.played = pointSnapshot(g, fields);
+  g.pointPlayers = { [g.homeId]: [...(g.lineup?.[g.homeId] || [])], [g.awayId]: [...(g.lineup?.[g.awayId] || [])] };
+  play(type, fields);
+  saveGame(g);
+}
+
+function goalSheet() {
+  const st = stateNow();
+  openSheet(`
+    <h3>Goal! Who caught it? <span class="muted">(thrown by ${esc(player(st.holder).name)})</span></h3>
+    <div class="actions">
+      ${pickerButtons(st.offense, st.holder, id => `recordGoal('${id}')`)}
+      <button class="full" onclick="closeSheet()">Cancel</button>
+    </div>`);
+}
+
+function recordGoal(pid) {
+  const st = stateNow();
+  endPoint('goal', { teamId: st.offense, playerId: pid, assistId: st.holder });
+  route();
+}
+
+function dropSheet() {
+  const st = stateNow();
+  openSheet(`
+    <h3>Drop. Who dropped ${esc(player(st.holder).name)}’s throw?</h3>
+    <div class="actions">
+      ${pickerButtons(st.offense, st.holder, id => `recordDrop('${id}')`)}
+      <button class="full" onclick="closeSheet()">Cancel</button>
+    </div>`);
+}
+
+function recordDrop(pid) {
+  const st = stateNow();
+  play('drop', { teamId: st.offense, playerId: pid, assistId: st.holder });
+  route();
+}
+
+function throwawaySheet() {
+  const st = stateNow(), def = team(st.defense);
+  openSheet(`
+    <h3>Throwaway by ${esc(player(st.holder).name)}</h3>
+    <div class="actions">
+      <button class="full" onclick="recordThrowaway(null)">Not blocked</button>
+      <div class="full muted divider">Blocked by ${esc(def.name)}:</div>
+      ${pickerButtons(def.id, null, id => `recordThrowaway('${id}')`)}
+      <button class="full d" onclick="callahanSheet()">Callahan (caught in the end zone for a goal)…</button>
+      <button class="full" onclick="closeSheet()">Cancel</button>
+    </div>`);
+}
+
+function recordThrowaway(blockerId) {
+  const st = stateNow(), grp = uid();
+  play('throwaway', { teamId: st.offense, playerId: st.holder, detail: { grp } });
+  if (blockerId) play('d', { teamId: st.defense, playerId: blockerId, detail: { grp } });
+  route();
+}
+
+function callahanSheet() {
+  const st = stateNow(), def = team(st.defense);
+  openSheet(`
+    <h3>Callahan! Who caught it for ${esc(def.name)}?</h3>
+    <div class="actions">
+      ${pickerButtons(def.id, null, id => `recordCallahan('${id}')`)}
+      <button class="full" onclick="throwawaySheet()">← Back</button>
+    </div>`);
+}
+
+function recordCallahan(pid) {
+  const st = stateNow(), grp = uid();
+  play('throwaway', { teamId: st.offense, playerId: st.holder, detail: { grp } });
+  endPoint('callahan', { teamId: st.defense, playerId: pid, detail: { grp } });
+  route();
+}
+
+function recordStall() {
+  const st = stateNow();
+  play('stall', { teamId: st.offense, playerId: st.holder });
+  route();
+}
+
+// Words for a play, e.g. "Pass Jordan → Sam".
+function describePlay(e) {
+  const n = id => (id ? player(id).name : 'someone');
+  switch (e.type) {
+    case 'pass': return `Pass ${n(e.playerId)} → ${n(e.targetId)}`;
+    case 'pull': return `Pull${e.playerId ? ` by ${n(e.playerId)}` : ''}${e.detail?.ob ? ' (out of bounds)' : ''}`;
+    case 'pickup': return `Pickup by ${n(e.playerId)}`;
+    case 'goal': return `Goal ${n(e.playerId)}${e.assistId ? ` from ${n(e.assistId)}` : ''}`;
+    case 'drop': return `Drop by ${n(e.playerId)}`;
+    case 'half': return 'Halftime';
+    default: return `${LABEL[e.type]} ${n(e.playerId)}`;
+  }
+}
+
+// Undo the last play (or the last group of plays recorded together). No confirmation: it's a quick fix
+// that's easy to redo, and the message says what was removed.
+function undo() {
+  const g = game(ui.gameId), last = g.events.at(-1);
+  if (!last) return;
+  const grp = last.detail?.grp, batch = [];
+  for (let i = g.events.length - 1; i >= 0; i--) {
+    if (batch.length && !(grp && g.events[i].detail?.grp === grp)) break;
+    batch.push(g.events[i]);
+  }
+  g.events.length -= batch.length;
+  const ids = batch.map(e => e.id);
+  persist(() => sb.from('events').delete().in('id', ids));
+  const ended = batch.find(e => e.played);
+  if (ended) { g.pointPlayers = ended.played; saveGame(g); } // back in the point that play ended
+  toast(`Undone: ${batch.reverse().map(describePlay).join(' + ')}`);
   route();
 }
 
@@ -1578,29 +1798,81 @@ function closeSheet() {
   if (needsRender) { needsRender = false; setTimeout(rerender); }
 }
 
-// ---------- Box score ----------
+// ---------- Stat tables ----------
 function statTable(rows, cols, sortKey, onSortName) {
   return `<div class="table-wrap"><table>
-    <thead><tr>${cols.map(c => `<th class="${c.l ? 'l' : ''} ${c.k === sortKey ? 'sorted' : ''}"
+    <thead><tr>${cols.map(c => `<th class="${c.l ? 'l' : ''} ${c.k === sortKey ? 'sorted' : ''}" ${c.title ? `title="${esc(c.title)}"` : ''}
       ${onSortName && c.sort !== false ? `onclick="${onSortName}('${c.k}')"` : ''}>${c.h}</th>`).join('')}</tr></thead>
     <tbody>${rows.map(r => `<tr class="${r.userId && r.userId === me() ? 'me' : ''}">${cols.map(c => `<td class="${c.l ? 'l' : ''}">${c.f ? c.f(r) : r[c.k]}</td>`).join('')}</tr>`).join('')}</tbody>
   </table></div>`;
 }
 
+// Highest first; names A–Z; stats that can't be calculated (null) go last.
+function sortRows(rows, key) {
+  return rows.sort((x, y) => {
+    if (key === 'name') return x.name.localeCompare(y.name);
+    const a = x[key], b = y[key];
+    if (a == null || b == null) return (a == null) - (b == null);
+    return b - a || (y.pm ?? 0) - (x.pm ?? 0);
+  });
+}
+
+// Keep the sort column valid for the current stat category.
+function sortKeyFor(key) {
+  const keys = STAT_CATS[statCat].cols.map(c => c[0]);
+  return key === 'name' || keys.includes(key) ? key : keys[0];
+}
+
+const playerNameCol = (showTeam = true) => ({
+  k: 'name', h: 'Player', l: true,
+  f: r => `<a href="#/profile/${r.id}" style="color:inherit">${showTeam ? `<span class="dot" style="background:${r.team.color}"></span>` : `<span class="muted">#${esc(r.number)}</span> `}${esc(r.name)}</a>`
+});
+const statFootnote = '<p class="muted foot">* Can’t be calculated yet (for example, no pass-by-pass games). +/- = goals + assists + Ds − drops − throwaways − stalls. Hover a column name to see what it means.</p>';
+
+// ---------- Box score (a game's page) ----------
+let boxTab = 'stats', boxSort = 'pm';
+function sortBox(k) { boxSort = k; route(); }
+
 function renderBox(g) {
-  const s = tally(g.events);
-  const cols = [
-    { k: 'name', h: 'Player', l: true, f: r => `<a href="#/profile/${r.id}" style="color:inherit"><span class="muted">#${esc(r.number)}</span> ${esc(r.name)}</a>` },
-    { k: 'pp', h: 'PP' }, { k: 'g', h: 'G' }, { k: 'a', h: 'A' }, { k: 'd', h: 'D' }, { k: 'to', h: 'TO' }, { k: 'pm', h: '+/-' }
-  ];
-  const side = t => {
-    const rows = t.players.map(p => ({ ...p, pp: 0, g: 0, a: 0, d: 0, to: 0, pm: 0, ...s[p.id] }))
-      .sort((x, y) => y.pm - x.pm || y.g - x.g);
-    return `<h2><span class="dot" style="background:${t.color}"></span>${esc(t.name)} — ${score(g, t.id)}</h2>
-      <div class="card">${statTable(rows, cols)}</div>`;
-  };
+  const an = analyze([g]), r = an.games[0] || analyzeGame(g);
   const h = team(g.homeId), a = team(g.awayId), half = halftimeScore(g);
   const live = g.status === 'live';
+  boxSort = sortKeyFor(boxSort);
+  const rowsFor = t => sortRows(t.players.map(p => ({ ...p, team: t, ...statsOf(an, p.id) })), boxSort);
+
+  // Game leaders: the top player in a few headline stats.
+  const everyone = [...rowsFor(h), ...rowsFor(a)];
+  const leaders = [['g', 'Goals'], ['a', 'Assists'], ['d', 'Ds'], ['pm', 'Plus/minus'], ['taT', 'Throwaways'], ['tou', 'Touches']].map(([k, label]) => {
+    const best = Math.max(0, ...everyone.map(p => p[k] || 0));
+    const who = everyone.filter(p => best > 0 && p[k] === best);
+    return who.length ? [label, `${who.map(p => p.name).slice(0, 3).join(', ')}${who.length > 3 ? '…' : ''} (${best})`] : null;
+  }).filter(Boolean);
+
+  const statsTab = `
+    ${leaders.length ? `<div class="card"><div class="chart-title">Game leaders</div>
+      <div class="leaders-list">${leaders.map(([l, v]) => `<div><span class="muted">${l}</span><b>${esc(v)}</b></div>`).join('')}</div></div>` : ''}
+    ${scoreChart(r)}
+    ${statCatTabs('route()')}
+    ${[h, a].map(t => `<h2><span class="dot" style="background:${t.color}"></span>${esc(t.name)} · ${score(g, t.id)}</h2>
+      <div class="card">${statTable(rowsFor(t), statCols(playerNameCol(false)), boxSort, 'sortBox')}</div>`).join('')}
+    ${statFootnote}`;
+
+  const pointsTab = r.points.length ? `<div class="card">${r.points.map((p, i) => {
+    const t = team(p.scorer), how = p.type === 'callahan' ? 'Callahan' : p.pulling ? (p.scorer === p.receiving ? 'Hold' : 'Break') : 'Goal';
+    const secs = p.pulling ? Math.max(0, Math.round((p.end - p.start) / 1000)) : null;
+    const on = tid => (p.played?.[tid] || []).map(id => player(id).name).join(', ');
+    return `<div class="point-row">
+      <div class="point-head"><span class="muted">#${i + 1}</span>
+        <b>${esc(h.name)} ${p.score[0]}–${p.score[1]} ${esc(a.name)}</b>
+        <span class="badge ${how === 'Break' || how === 'Callahan' ? 'live' : ''}">${how.toUpperCase()}</span></div>
+      <div><span class="dot" style="background:${t.color}"></span>${esc(t.name)} scored
+        ${p.scorerId ? `· ${esc(player(p.scorerId).name)}${p.assistId ? ` from ${esc(player(p.assistId).name)}` : ''}` : ''}</div>
+      <div class="muted">${[p.pulling ? `${esc(team(p.pulling).name)} pulled` : '', secs != null ? `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}` : '',
+        r.tracked ? `${p.throws} throws` : '', `${p.turns} turnover${p.turns === 1 ? '' : 's'}`].filter(Boolean).join(' · ')}</div>
+      ${p.played ? `<div class="muted on-field">${[h, a].filter(x => on(x.id)).map(x => `${esc(x.name)}: ${esc(on(x.id))}`).join('<br>')}</div>` : ''}
+    </div>`;
+  }).join('')}</div>` : '<p class="muted">No points played yet.</p>';
+
   app.innerHTML = `
     ${live ? `
     <div class="card scoreboard live-board">
@@ -1612,14 +1884,18 @@ function renderBox(g) {
       </div>
       <div class="team" style="color:${a.color}">${esc(a.name)}</div>
     </div>
-    <p class="muted" style="text-align:center;margin-top:-4px">Updates automatically as plays are recorded.</p>` : `
+    <p class="muted" style="text-align:center;margin-top:-4px">Updates automatically as plays are recorded.</p>
+    <h2>Recent plays</h2><div class="card">${playLog(g, 8, 'No plays yet.')}</div>` : `
     <div class="row" style="justify-content:space-between">
       <h1 style="flex:1">${esc(h.name)} ${score(g, h.id)} – ${score(g, a.id)} ${esc(a.name)}</h1>
       <span class="badge ${g.status}" style="flex:0 0 auto">${STATUS[g.status]}</span>
     </div>
     <div class="muted">${new Date(g.created).toLocaleString()}${half ? ` · Halftime ${half[0]}–${half[1]}` : ''}</div>`}
-    ${live ? `<h2>Recent plays</h2><div class="card">${playLog(g, 10, 'No plays yet.')}</div>` : ''}
-    ${side(h)}${side(a)}
+    <div class="tabs leader-tabs" style="margin-top:14px">
+      <button class="${boxTab === 'stats' ? 'on' : ''}" onclick="boxTab = 'stats'; route()">Stats</button>
+      <button class="${boxTab === 'points' ? 'on' : ''}" onclick="boxTab = 'points'; route()">Points</button>
+    </div>
+    ${boxTab === 'points' ? pointsTab : statsTab}
     ${isAdmin() ? `<div class="row">
       ${g.status === 'live'
         ? `<a class="btn primary" href="#/game/${g.id}">Back to tracking</a>`
@@ -1637,35 +1913,19 @@ function deleteGame(id) {
 }
 
 // ---------- Leaderboard ----------
-let leaderSort = 'g';
+let leaderSort = 'pm';
 let leaderView = 'all', leaderTeamId = null;   // 'all' players, or one 'team'
 function sortLeaders(k) { leaderSort = k; renderLeaders(); }
 
 function renderLeaders() {
-  const all = tally(db.games.flatMap(g => g.events));
-  const gp = {};
-  for (const g of db.games) {
-    if (g.status === 'scheduled') continue; // not played yet
-    for (const tid of [g.homeId, g.awayId]) for (const p of team(tid).players) gp[p.id] = (gp[p.id] || 0) + 1;
-  }
+  const an = analyze(db.games);
   // "Teams" view: pick a team (defaults to your own claimed team, else the first one).
   if (leaderView === 'team' && !team(leaderTeamId)) leaderTeamId = myPlayer()?.team.id || db.teams[0]?.id;
   const t = leaderView === 'team' ? team(leaderTeamId) : null;
-  const rows = (t ? [t] : db.teams).flatMap(t => t.players.map(p => ({
-    ...p, team: t, gp: gp[p.id] || 0, pp: 0, g: 0, a: 0, d: 0, to: 0, c: 0, pm: 0, ...all[p.id]
-  })));
-  rows.sort((x, y) => leaderSort === 'name'
-    ? x.name.localeCompare(y.name)
-    : (leaderSort === 'to' ? x.to - y.to : y[leaderSort] - x[leaderSort]) || y.pm - x.pm);
-
+  leaderSort = sortKeyFor(leaderSort);
+  const rows = sortRows((t ? [t] : db.teams).flatMap(tm => tm.players.map(p => ({ ...p, team: tm, ...statsOf(an, p.id) }))), leaderSort);
   const played = db.games.filter(g => g.status !== 'scheduled' && (!t || g.homeId === t.id || g.awayId === t.id));
-  // Team record from finished games.
-  const rec = { w: 0, l: 0, tie: 0, pf: 0, pa: 0 };
-  if (t) for (const g of played.filter(g => g.status === 'final')) {
-    const us = score(g, t.id), them = score(g, g.homeId === t.id ? g.awayId : g.homeId);
-    rec.pf += us; rec.pa += them;
-    if (us > them) rec.w++; else if (us < them) rec.l++; else rec.tie++;
-  }
+  const ts = t && an.teams[t.id];
   app.innerHTML = `
     <h1>Season leaders</h1>
     <div class="tabs leader-tabs">
@@ -1677,17 +1937,53 @@ function renderLeaders() {
         <button class="${x.id === t.id ? 'on' : ''}" style="--c:${esc(x.color)}"
           onclick="leaderTeamId = '${x.id}'; renderLeaders()"><span class="dot" style="background:${esc(x.color)}"></span>${esc(x.name)}</button>`).join('')}
       </div>
-      <div class="card">
-        <b><span class="dot" style="background:${esc(t.color)}"></span>${esc(t.name)}</b>
-        <span class="muted">· ${rec.w}–${rec.l}${rec.tie ? `–${rec.tie}` : ''} record · ${rec.pf} scored, ${rec.pa} allowed</span>
-      </div>` : '<p class="muted">No teams yet.</p>') : ''}
+      <a class="card game-link" href="#/team/${t.id}">
+        <span><b><span class="dot" style="background:${esc(t.color)}"></span>${esc(t.name)}</b>
+          <span class="muted">· ${ts ? `${ts.w}–${ts.l}${ts.t ? `–${ts.t}` : ''} record · ${ts.scored} scored, ${ts.allowed} allowed` : 'no games yet'}</span></span>
+        <span class="muted">Team stats →</span></a>` : '<p class="muted">No teams yet.</p>') : ''}
     <p class="muted">${played.length} game${played.length === 1 ? '' : 's'} played. Tap a column to sort, or a name to see that player’s games.</p>
-    ${rows.length ? `<div class="card">${statTable(rows, [
-      { k: 'name', h: 'Player', l: true, f: r => `<a href="#/profile/${r.id}" style="color:inherit"><span class="dot" style="background:${r.team.color}"></span>${esc(r.name)}</a>` },
-      { k: 'gp', h: 'GP' }, { k: 'pp', h: 'PP' }, { k: 'g', h: 'G' }, { k: 'a', h: 'A' }, { k: 'd', h: 'D' },
-      { k: 'to', h: 'TO' }, { k: 'c', h: 'Cal' }, { k: 'pm', h: '+/-' }
-    ], leaderSort, 'sortLeaders')}</div>` : t ? '<p class="muted">This team has no players yet.</p>' : ''}
-    <p class="muted">+/- = goals + assists + Ds − turnovers</p>`;
+    ${statCatTabs('renderLeaders()')}
+    ${rows.length ? `<div class="card">${statTable(rows, statCols(playerNameCol()), leaderSort, 'sortLeaders')}</div>`
+      : t ? '<p class="muted">This team has no players yet.</p>' : ''}
+    ${statFootnote}`;
+}
+
+// ---------- Team stats page ----------
+let teamSort = 'pm';
+function sortTeam(k) { teamSort = k; route(); }
+
+function renderTeamPage(tid) {
+  const t = team(tid);
+  if (!t) { location.hash = '#/teams'; return; }
+  const games = db.games.filter(g => g.homeId === tid || g.awayId === tid);
+  const an = analyze(games);
+  const ts = an.teams[tid] || { ...TEAM_ZERO(), w: 0, l: 0, t: 0, gp: 0, offProd: null, conv: null };
+  const diff = ts.scored - ts.allowed;
+  teamSort = sortKeyFor(teamSort);
+  const rows = sortRows(t.players.map(p => ({ ...p, team: t, ...statsOf(an, p.id) })), teamSort);
+  const flows = an.flows.filter(f => t.players.some(p => p.id === f.g));
+  const played = games.filter(g => g.status !== 'scheduled').sort((x, y) => y.created - x.created);
+  app.innerHTML = `
+    <div class="row"><h1><span class="dot" style="background:${esc(t.color)}"></span>${esc(t.name)}</h1>
+      <a class="btn small" href="#/leaders">← Leaders</a></div>
+    <p class="muted">${ts.gp} game${ts.gp === 1 ? '' : 's'} played</p>
+    ${tiles([
+      ['Record', `${ts.w}–${ts.l}${ts.t ? `–${ts.t}` : ''}`, 'Finished games'],
+      ['Point spread', `${ts.scored}–${ts.allowed}`, `${diff > 0 ? '+' : ''}${diff} goal difference`],
+      ['Offensive productivity', fmtPct(ts.offProd), 'Holds ÷ O-line points'],
+      ['Conversion rate', fmtPct(ts.conv), 'Goals ÷ (O points + opponent turnovers)'],
+      ['Holds', `${ts.holds}`, `of ${ts.oPts} O-line points`],
+      ['Breaks', `${ts.breaks}`, `of ${ts.dPts} D-line points`]
+    ])}
+    ${possessionChart(an.possessions.filter(p => p.team === tid))}
+    ${pointsPerLineChart(ts, t.name)}
+    ${flowChart(flows)}
+    <h2>Player stats</h2>
+    ${statCatTabs('route()')}
+    ${rows.length ? `<div class="card">${statTable(rows, statCols(playerNameCol(false)), teamSort, 'sortTeam')}</div>` : '<p class="muted">No players yet.</p>'}
+    ${statFootnote}
+    <h2>Games</h2>
+    ${played.length ? played.map(gameCard).join('') : '<p class="muted">No games yet.</p>'}`;
 }
 
 // ---------- Teams & rosters ----------
@@ -1714,7 +2010,7 @@ function teamCard(t) {
   return `
     <div class="card">
       <div class="row" style="margin-bottom:6px">
-        <h2 style="margin:0;flex:1"><span class="dot" style="background:${esc(t.color)}"></span>${esc(t.name)}</h2>
+        <h2 style="margin:0;flex:1"><a href="#/team/${t.id}" style="color:inherit"><span class="dot" style="background:${esc(t.color)}"></span>${esc(t.name)}</a></h2>
         <button class="small" onclick="editTeam('${t.id}')">Edit</button>
       </div>
       ${t.players.length ? `<ul class="roster">${t.players.map(p => `
