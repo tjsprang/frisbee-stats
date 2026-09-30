@@ -16,7 +16,7 @@ Live stat tracking for ultimate frisbee leagues. It's a static page (`index.html
 
 ## Setup
 
-1. Create a Supabase project. In the SQL Editor, run the scripts in `supabase/` in order (`001` through `006`).
+1. Create a Supabase project. In the SQL Editor, run the scripts in `supabase/` in order (`001` through `007`).
 2. Put your project URL and publishable (anon) key into `SUPABASE_URL` and `SUPABASE_KEY` near the top of the script in `index.html`.
 3. In Supabase, go to **Authentication → URL Configuration**. Set the **Site URL** to where the app is hosted, and add it under **Redirect URLs**.
 4. Host `index.html` anywhere static, for example GitHub Pages.

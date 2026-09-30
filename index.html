@@ -49,6 +49,8 @@
   }
   button.primary, .btn.primary { background: var(--accent); color: var(--accent-text); border-color: transparent; }
   button.danger { color: var(--bad); }
+  .danger-zone { border: 1px solid color-mix(in srgb, var(--bad) 45%, var(--line)); }
+  .danger-zone .row > span { flex: 1; }
   button.small, .btn.small { padding: 6px 10px; font-size: 14px; border-radius: 8px; white-space: nowrap; }
   button:active { transform: scale(0.97); }
   select, input {
@@ -398,7 +400,7 @@ async function fetchAll(table, leagueId, orders) {
 
 async function fetchLeague(id) {
   const [lg, teams, players, games, events, passProbe, seasons, hof] = await Promise.all([
-    sb.from('leagues').select('name, border_colors, on_field').eq('id', id).single()
+    sb.from('leagues').select('name, border_colors, on_field, created_by').eq('id', id).single()
       .then(r => { if (r.error) throw r.error; return r.data; }),
     fetchAll('teams', id, ['created_at', 'id']),
     fetchAll('players', id, ['sort', 'id']),
@@ -413,6 +415,7 @@ async function fetchLeague(id) {
     teams: teams.map(t => ({ id: t.id, name: t.name, color: t.color, seasonId: t.season_id, players: [] })),
     games: games.map(toGame),
     settings: { onField: lg.on_field },
+    createdBy: lg.created_by,
     claims: claims || [],
     claimsReady: !!claims,           // false until supabase/004_player_claims.sql has been run
     passReady: !passProbe.error,     // false until supabase/005_pass_by_pass.sql has been run
@@ -522,35 +525,66 @@ function refreshLeague() {
 }
 
 // ----- Saving: a queue of changes sent to Supabase one at a time, in order -----
-const writes = [];
+// Each change is a plain description (not code), so the queue can be kept on the device: if the page
+// closes or the phone dies before changes reach Supabase, they're sent the next time the app opens.
+//   { upsert: 'table', rows: [...] }         insert or update rows (safe to repeat)
+//   { del: 'table', vals: [...], col: 'id' } delete rows whose col is one of vals
+//   { rpc: 'function', args: {...} }         call a database function
+let writes = [];
 let flushing = false, offline = false;
+const queueKey = () => `frisbee-queue:${session?.user.id}`;
 
-// Queue a change. `fn` makes the Supabase request and resolves to { error }.
-function persist(fn) {
-  writes.push({ fn, leagueId: league.id });
+function saveQueue() {
+  try { localStorage.setItem(queueKey(), JSON.stringify(writes)); } catch {}
+}
+
+// After signing in: pick up any changes left over from last time.
+function restoreQueue() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(queueKey())) || [];
+    if (!saved.length) return;
+    writes = [...saved, ...writes];
+    missedRemote = true;   // reload the league once they're in, so the screen matches
+    toast(`Sending ${saved.length} change${saved.length === 1 ? '' : 's'} saved on this device…`);
+    flush();
+  } catch {}
+}
+
+// Queue one or more changes (applied in order). Falsy entries are skipped, for optional steps.
+function persist(...ops) {
+  ops = ops.filter(Boolean);
+  if (!ops.length) return;
+  writes.push({ ops, done: 0, leagueId: league.id });
+  saveQueue();
   flush();
 }
 
-// Run several requests in order, stopping at the first error.
-const steps = (...makers) => async () => {
-  for (const make of makers) { const r = await make(); if (r.error) return r; }
-  return { error: null };
-};
+function runOp(op) {
+  if (op.upsert) return sb.from(op.upsert).upsert(op.rows);
+  if (op.del) return sb.from(op.del).delete().in(op.col || 'id', op.vals);
+  return sb.rpc(op.rpc, op.args);
+}
 
 async function flush() {
-  if (flushing) return;
+  if (flushing || !session) return;
   flushing = true;
-  while (writes.length) {
-    let error;
-    try { ({ error } = await writes[0].fn()); } catch (err) { error = { message: String(err) }; }
+  while (writes.length && session) {
+    const w = writes[0];
+    let error = null;
+    // Resume where it left off (every step is safe to repeat anyway).
+    for (; w.done < w.ops.length; w.done++) {
+      try { ({ error } = await runOp(w.ops[w.done])); } catch (err) { error = { message: String(err) }; }
+      if (error) break;
+    }
     if (error && !error.code) {
       // No answer from Supabase (no signal, or a hiccup): wait and retry the same change.
-      offline = true; updateSyncBadge();
+      offline = true; updateSyncBadge(); saveQueue();
       await new Promise(r => setTimeout(r, 3000));
+      if (!session) break;
       continue;
     }
     offline = false;
-    const w = writes.shift();
+    writes.shift(); saveQueue();
     if (error) {
       // Supabase refused it (e.g. not an admin of this league): drop it and re-sync with the server.
       toast(`Couldn’t save a change: ${dbErrorText(error)}`);
@@ -560,17 +594,16 @@ async function flush() {
   }
   flushing = false;
   updateSyncBadge();
-  if (missedRemote) { missedRemote = false; refreshLeague(); }
+  if (missedRemote && session) { missedRemote = false; refreshLeague(); }
 }
+window.addEventListener('online', () => flush());
 
-const saveGame = g => { const row = gameRow(g); persist(() => sb.from('games').upsert(row)); };
-const saveEvent = (g, e) => { const row = eventRow(g, e); persist(() => sb.from('events').upsert(row)); };
-
-window.addEventListener('beforeunload', e => { if (writes.length) { e.preventDefault(); e.returnValue = ''; } });
+const saveGame = g => persist({ upsert: 'games', rows: [gameRow(g)] });
+const saveEvent = (g, e) => persist({ upsert: 'events', rows: [eventRow(g, e)] });
 
 function updateSyncBadge() {
   const el = document.getElementById('sync');
-  el.textContent = offline ? `Offline · ${writes.length} change${writes.length === 1 ? '' : 's'} waiting to save` : '';
+  el.textContent = offline ? `Offline · ${writes.length} change${writes.length === 1 ? '' : 's'} saved on this device, waiting to send` : '';
   el.classList.toggle('show', offline && writes.length > 0);
 }
 
@@ -694,14 +727,15 @@ async function uploadLegacy(btn) {
   btn.disabled = true; btn.textContent = 'Uploading…';
   const chunks = (rows, n = 500) => Array.from({ length: Math.ceil(rows.length / n) }, (_, i) => rows.slice(i * n, i * n + n));
   const games = (d.games || []).map(g => ({ ...g, created: g.created || Date.now() }));
-  const run = steps(
-    () => sb.from('teams').upsert(d.teams.map(teamRow)),
-    () => sb.from('players').upsert(d.teams.flatMap(playerRows)),
-    () => sb.from('games').upsert(games.map(gameRow)),
-    ...chunks(games.flatMap(g => g.events.map(e => eventRow(g, e)))).map(rows => () => sb.from('events').upsert(rows)),
-    ...(d.settings?.onField ? [() => sb.rpc('set_league_on_field', { p_league_id: league.id, p_on_field: d.settings.onField })] : [])
-  );
-  const { error } = await run();
+  const ops = [
+    { upsert: 'teams', rows: d.teams.map(teamRow) },
+    { upsert: 'players', rows: d.teams.flatMap(playerRows) },
+    { upsert: 'games', rows: games.map(gameRow) },
+    ...chunks(games.flatMap(g => g.events.map(e => eventRow(g, e)))).map(rows => ({ upsert: 'events', rows })),
+    d.settings?.onField && { rpc: 'set_league_on_field', args: { p_league_id: league.id, p_on_field: d.settings.onField } }
+  ].filter(Boolean);
+  let error = null;
+  for (const op of ops) { ({ error } = await runOp(op)); if (error) break; }
   if (error) { btn.disabled = false; btn.textContent = 'Try again'; toast(`Upload failed: ${dbErrorText(error)}`); return; }
   try { localStorage.removeItem(`${LEGACY_KEY}:${league.id}`); } catch {}
   toast('Uploaded! Everyone in the league can see these teams and games now.');
@@ -981,6 +1015,11 @@ async function joinLeague(ev, id) {
   const { data, error } = await sb.rpc('join_league', { p_league_id: id, p_password: document.getElementById('lp-' + id).value });
   btn.disabled = false;
   if (error) { document.getElementById('lm-' + id).textContent = dbErrorText(error); return; }
+  // Since supabase/007, join_league answers { ok, league } or { ok: false, error } (so wrong guesses can be counted).
+  if (data && 'ok' in data) {
+    if (!data.ok) { document.getElementById('lm-' + id).textContent = data.error; return; }
+    return enterLeague(data.league, 'admin');
+  }
   enterLeague(data, 'admin');
 }
 
@@ -1299,7 +1338,78 @@ function renderSettings() {
         <button class="primary" style="width:100%" ${live ? 'disabled' : ''} onclick="openNewSeason()">🏁 End ${esc(s.name)} and start a new season</button>
       </div>
       <a class="card game-link" href="#/hof"><span><b>🏆 Hall of Fame</b><br><span class="muted">${db.hof.length} inducted · induct players at the end of each season</span></span><span class="muted">→</span></a>`;
-    })() : ''}`;
+    })() : ''}
+
+    <h2>Admins</h2>
+    <div class="card" id="admin-list"><span class="muted">Loading…</span></div>
+
+    <h2>League password</h2>
+    <div class="card">
+      <p class="muted" style="margin-top:0">Anyone with the password can join as an admin. Change it if it’s been shared too widely;
+        current admins stay admins (remove them above if needed).</p>
+      <form class="row" onsubmit="changeLeaguePassword(event)">
+        <input id="new-pw" type="password" placeholder="New password (4+ characters)" minlength="4" required autocomplete="new-password">
+        <button class="primary small">Change</button>
+      </form>
+      <div class="msg" id="pw-msg"></div>
+    </div>
+
+    <h2>Danger zone</h2>
+    <div class="card danger-zone">
+      <div class="row"><span><b>Leave ${esc(league.name)}</b><br><span class="muted">You’ll stop being an admin. You can rejoin with the password.</span></span>
+        <button class="small" onclick="removeAdmin('${me()}', true)">Leave</button></div>
+      <div class="row" style="margin-top:14px"><span><b>Delete ${esc(league.name)}</b><br><span class="muted">Permanently deletes every season, team, game and stat.</span></span>
+        <button class="small danger" onclick="deleteLeague()">Delete</button></div>
+    </div>`;
+  loadAdmins();
+}
+
+// ---------- Admins, password, leaving and deleting ----------
+async function loadAdmins() {
+  const box = document.getElementById('admin-list');
+  const { data, error } = await sb.from('league_admins').select('user_id, user_email, joined_at').eq('league_id', league.id).order('joined_at');
+  if (!document.getElementById('admin-list')) return;
+  if (error) { box.innerHTML = `<span class="msg error">${esc(dbErrorText(error))}</span>`; return; }
+  adminsCache = data;
+  box.innerHTML = data.map(a => {
+    const creator = a.user_id === db.createdBy, self = a.user_id === me();
+    return `<div class="claim-row"><span><b>${esc(a.user_email || 'Unknown email')}</b>
+        ${self ? '<span class="badge you">YOU</span>' : ''} ${creator ? '<span class="badge">CREATOR</span>' : ''}
+        <div class="muted" style="font-size:12px">Admin since ${new Date(a.joined_at).toLocaleDateString()}</div></span>
+      ${!self && !creator ? `<button class="small" onclick="removeAdmin('${a.user_id}', false)">Remove</button>` : ''}</div>`;
+  }).join('') + (data.length === 1 ? '<p class="muted" style="margin-bottom:0">You’re the only admin. Share the league password with anyone who should help run the league.</p>' : '');
+}
+
+let adminsCache = [];
+async function removeAdmin(userId, self) {
+  const email = adminsCache.find(a => a.user_id === userId)?.user_email || '';
+  const q = self ? `Leave ${league.name}? You’ll no longer be able to manage it.` : `Remove ${email || 'this admin'} from ${league.name}? They can rejoin only with the league password, so change it if needed.`;
+  if (!confirm(q)) return;
+  const { error } = await sb.rpc('remove_league_admin', { p_league_id: league.id, p_user_id: userId });
+  if (error) return toast(dbErrorText(error));
+  if (self) { toast(`You left ${league.name}.`); leaveLeague(); location.hash = '#/admin'; return; }
+  toast(`Removed ${email || 'the admin'}.`);
+  loadAdmins();
+}
+
+async function changeLeaguePassword(ev) {
+  ev.preventDefault();
+  const pw = document.getElementById('new-pw').value, msg = document.getElementById('pw-msg');
+  const { error } = await sb.rpc('change_league_password', { p_league_id: league.id, p_password: pw });
+  msg.classList.toggle('error', !!error);
+  msg.textContent = error ? dbErrorText(error) : 'Password changed. Share the new one with anyone who should be able to join.';
+  if (!error) document.getElementById('new-pw').value = '';
+}
+
+async function deleteLeague() {
+  const typed = prompt(`This permanently deletes ${league.name}: every season, team, player, game, stat, claim and Hall of Fame entry, for everyone. It can’t be undone.\n\nType the league name to confirm:`);
+  if (typed === null) return;
+  if (writes.length) return toast('Some changes are still saving. Try again in a moment.');
+  const { error } = await sb.rpc('delete_league', { p_league_id: league.id, p_confirm_name: typed });
+  if (error) return toast(dbErrorText(error));
+  const name = league.name;
+  leaveLeague(); location.hash = '#/admin';
+  toast(`${name} was deleted.`);
 }
 
 // ---------- New season ----------
@@ -1343,7 +1453,7 @@ function setOnField(delta) {
   const n = Math.min(11, Math.max(3, onFieldMax() + delta));
   db.settings = { ...db.settings, onField: n };
   const leagueId = league.id;
-  persist(() => sb.rpc('set_league_on_field', { p_league_id: leagueId, p_on_field: n }));
+  persist({ rpc: 'set_league_on_field', args: { p_league_id: leagueId, p_on_field: n } });
   renderSettings();
 }
 
@@ -1357,7 +1467,7 @@ function clearSchedule() {
   const ids = seasonGames().filter(g => g.status === 'scheduled').map(g => g.id);
   if (!confirm(`Remove all ${ids.length} upcoming scheduled games? Live and finished games are kept.`)) return;
   db.games = db.games.filter(g => !ids.includes(g.id));
-  persist(() => sb.from('games').delete().in('id', ids));
+  persist({ del: 'games', vals: ids });
   renderGames();
 }
 
@@ -1519,10 +1629,7 @@ function saveSchedule(replace) {
   const oldIds = replace ? seasonGames().filter(g => g.status === 'scheduled').map(g => g.id) : [];
   db.games = db.games.filter(g => !oldIds.includes(g.id));
   db.games.push(...added);
-  persist(steps(
-    ...(oldIds.length ? [() => sb.from('games').delete().in('id', oldIds)] : []),
-    () => sb.from('games').upsert(rows)
-  ));
+  persist(oldIds.length && { del: 'games', vals: oldIds }, { upsert: 'games', rows });
   schedPreview = null;
   location.hash = '#/games';
 }
@@ -1939,7 +2046,7 @@ function undo() {
   }
   g.events.length -= batch.length;
   const ids = batch.map(e => e.id);
-  persist(() => sb.from('events').delete().in('id', ids));
+  persist({ del: 'events', vals: ids });
   const ended = batch.find(e => e.played);
   if (ended) { g.pointPlayers = ended.played; saveGame(g); } // back in the point that play ended
   toast(`Undone: ${batch.reverse().map(describePlay).join(' + ')}`);
@@ -2073,7 +2180,7 @@ function reopen(id) { const g = game(id); g.status = 'live'; saveGame(g); locati
 function deleteGame(id) {
   if (!confirm('Delete this game and all its stats? This cannot be undone.')) return;
   db.games = db.games.filter(g => g.id !== id);
-  persist(() => sb.from('games').delete().eq('id', id));
+  persist({ del: 'games', vals: [id] });
   location.hash = '#/games';
 }
 
@@ -2201,7 +2308,7 @@ function induct(personId) {
   const row = { id: uid(), league_id: league.id, person_id: personId, name: latest.name,
     season_id: archived?.id || activeSeason()?.id || null, note: note.trim().slice(0, 280) || null, inducted_at: new Date().toISOString() };
   db.hof.push(row);
-  persist(() => sb.from('hall_of_fame').upsert(row));   // upsert: safe to retry after a dropped connection
+  persist({ upsert: 'hall_of_fame', rows: [row] });
   toast(`🏆 ${latest.name} is in the Hall of Fame!`);
   renderHallOfFame();
 }
@@ -2210,7 +2317,7 @@ function removeFromHof(id) {
   const h = db.hof.find(x => x.id === id);
   if (!confirm(`Remove ${h.name} from the Hall of Fame?`)) return;
   db.hof = db.hof.filter(x => x.id !== id);
-  persist(() => sb.from('hall_of_fame').delete().eq('id', id));
+  persist({ del: 'hall_of_fame', vals: [id] });
   renderHallOfFame();
 }
 
@@ -2391,11 +2498,7 @@ function saveTeam() {
   const t = editing, removed = db.teams[i].players.filter(p => !t.players.some(x => x.id === p.id)).map(p => p.id);
   const row = teamRow(t), rows = playerRows(t);
   db.teams[i] = t;
-  persist(steps(
-    () => sb.from('teams').upsert(row),
-    ...(rows.length ? [() => sb.from('players').upsert(rows)] : []),
-    ...(removed.length ? [() => sb.from('players').delete().in('id', removed)] : [])
-  ));
+  persist({ upsert: 'teams', rows: [row] }, rows.length && { upsert: 'players', rows }, removed.length && { del: 'players', vals: removed });
   editing = null; renderTeams();
 }
 
@@ -2421,10 +2524,8 @@ function deleteTeamById(id) {
   const gameIds = games.map(g => g.id);
   db.games = db.games.filter(g => !gameIds.includes(g.id));
   db.teams = db.teams.filter(x => x.id !== id);
-  persist(steps(
-    ...(gameIds.length ? [() => sb.from('games').delete().in('id', gameIds)] : []),   // plays go with their games
-    () => sb.from('teams').delete().eq('id', id)                                      // players go with their team
-  ));
+  persist(gameIds.length && { del: 'games', vals: gameIds },   // plays go with their games
+    { del: 'teams', vals: [id] });                               // players go with their team
   if (editing?.id === id) editing = null;
   toast(`Deleted ${t.name}${gameIds.length ? ` and ${gameIds.length} game${gameIds.length === 1 ? '' : 's'}` : ''}.`);
   renderTeams();
@@ -2436,7 +2537,7 @@ function addTeam() {
   const t = { id: uid(), name: n, color: document.getElementById('tc').value, players: [], seasonId: activeSeason()?.id || null };
   db.teams.push(t);
   const row = teamRow(t);
-  persist(() => sb.from('teams').upsert(row));
+  persist({ upsert: 'teams', rows: [row] });
   editing = structuredClone(t); // open the new team straight away so players can be added
   renderTeams();
   document.getElementById('new-name').focus();
@@ -2451,12 +2552,9 @@ function resetAll() {
   db.teams = [...db.teams.filter(t => !oldTeams.includes(t.id)), ...fresh];
   editing = null;
   const teams = fresh.map(teamRow), players = fresh.flatMap(playerRows);
-  persist(steps(
-    ...(oldGames.length ? [() => sb.from('games').delete().in('id', oldGames)] : []),   // plays are removed with their games
-    ...(oldTeams.length ? [() => sb.from('teams').delete().in('id', oldTeams)] : []),   // players are removed with their teams
-    () => sb.from('teams').upsert(teams),
-    () => sb.from('players').upsert(players)
-  ));
+  persist(oldGames.length && { del: 'games', vals: oldGames },   // plays are removed with their games
+    oldTeams.length && { del: 'teams', vals: oldTeams },           // players are removed with their teams
+    { upsert: 'teams', rows: teams }, { upsert: 'players', rows: players });
   location.hash = '#/games'; route();
 }
 
@@ -2529,7 +2627,9 @@ async function saveNewPassword(ev) {
 }
 
 async function signOut() {
-  if (confirm('Sign out on this device?')) await sb.auth.signOut();
+  const waiting = writes.length
+    ? `\n\n${writes.length} change${writes.length === 1 ? ' hasn’t' : 's haven’t'} been sent yet. ${writes.length === 1 ? 'It stays' : 'They stay'} on this device and will be sent next time you sign in here.` : '';
+  if (confirm(`Sign out on this device?${waiting}`)) await sb.auth.signOut();
 }
 
 function renderSetup() {
@@ -2544,11 +2644,16 @@ function renderSetup() {
 
 if (sb) {
   // Fires once on load with any saved session, then on every sign in / sign out.
+  let restoredFor = null;
   sb.auth.onAuthStateChange((event, s) => {
     session = s; authReady = true;
     if (event === 'PASSWORD_RECOVERY') recovering = true;
-    if (event === 'SIGNED_OUT') { leaveLeague(); location.hash = '#/'; }
-    setTimeout(route); // don't call Supabase from inside this callback
+    // Unsent changes stay saved on the device (under that account) when signing out.
+    if (event === 'SIGNED_OUT') { writes = []; restoredFor = null; leaveLeague(); location.hash = '#/'; }
+    setTimeout(() => {   // don't call Supabase from inside this callback
+      if (s && restoredFor !== s.user.id) { restoredFor = s.user.id; restoreQueue(); }
+      route();
+    });
   });
 }
 route();
