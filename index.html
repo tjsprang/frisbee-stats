@@ -1532,7 +1532,8 @@ let lineupDraft = null, lineupTeam = null;
 function openLineup() {
   const g = game(ui.gameId);
   lineupDraft = { [g.homeId]: [...(g.lineup?.[g.homeId] || [])], [g.awayId]: [...(g.lineup?.[g.awayId] || [])] };
-  lineupTeam = ui.teamId;
+  // Open on the team currently shown, or the home team (ui.teamId can be left over from another game).
+  lineupTeam = ui.teamId === g.awayId ? g.awayId : g.homeId;
   renderLineup();
 }
 
