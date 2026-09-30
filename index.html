@@ -1665,6 +1665,12 @@ async function deleteLeague() {
   const typed = prompt(`This permanently deletes ${league.name}: every season, team, player, game, stat, claim and Hall of Fame entry, for everyone. It can’t be undone.\n\nType the league name to confirm:`);
   if (typed === null) return;
   if (writes.length) return toast('Some changes are still saving. Try again in a moment.');
+  if (typed.trim().toLowerCase() !== league.name.trim().toLowerCase()) return toast('The name didn’t match, so nothing was deleted.');
+  // Remove the players' photos first (while we're still an admin of the league, which storage checks).
+  if (db.profilesReady) {
+    const { data: files } = await sb.storage.from('player-photos').list(league.id, { limit: 1000 });
+    if (files?.length) await sb.storage.from('player-photos').remove(files.map(f => `${league.id}/${f.name}`));
+  }
   const { error } = await sb.rpc('delete_league', { p_league_id: league.id, p_confirm_name: typed });
   if (error) return toast(dbErrorText(error));
   const name = league.name;
