@@ -481,8 +481,8 @@ const eventRow = (g, e) => ({
 
 // All of a league's rows from one table. Supabase returns at most 1000 rows per request,
 // so fetch the first page (with a total count), then the rest in parallel.
-async function fetchAll(table, leagueId, orders) {
-  const query = () => orders.reduce((q, o) => q.order(o), sb.from(table).select('*', { count: 'exact' }).eq('league_id', leagueId));
+async function fetchAll(table, leagueId, orders, { select = '*', filter = q => q } = {}) {
+  const query = () => orders.reduce((q, o) => q.order(o), filter(sb.from(table).select(select, { count: 'exact' }).eq('league_id', leagueId)));
   const first = await query().range(0, 999);
   if (first.error) throw first.error;
   const pages = Math.ceil((first.count || 0) / 1000);
@@ -491,17 +491,30 @@ async function fetchAll(table, leagueId, orders) {
   return [first, ...rest].flatMap(r => r.data);
 }
 
-async function fetchLeague(id) {
-  const [lg, teams, players, games, events, passProbe, seasons, hof, playoffProbe, profiles, avail] = await Promise.all([
+// Games and plays for some seasons (or every season, when `seasonIds` is null).
+// Plays don't store their season, so they're filtered through their game.
+function fetchGamesAndPlays(id, seasonIds) {
+  return Promise.all([
+    fetchAll('games', id, ['id'], { filter: q => (seasonIds ? q.in('season_id', seasonIds) : q) }),
+    fetchAll('events', id, ['seq'], seasonIds ? { select: '*, games!inner(season_id)', filter: q => q.in('games.season_id', seasonIds) } : {})
+  ]);
+}
+
+// Loads a league. Teams and rosters come for every season (they're small, and all-time features need them),
+// but games and plays only for the current season plus any past seasons already opened (`alsoSeasons`);
+// other past seasons load when first needed (see loadSeasons).
+async function fetchLeague(id, alsoSeasons = []) {
+  const seasons = await sb.from('seasons').select('*').eq('league_id', id).order('number');   // fails until supabase/006
+  const active = seasons.data?.find(s => s.status === 'active');
+  const loadIds = !seasons.error && active ? [...new Set([active.id, ...alsoSeasons])] : null;   // null = everything
+  const [lg, teams, players, [games, events], passProbe, hof, playoffProbe, profiles, avail] = await Promise.all([
     sb.from('leagues').select('*').eq('id', id).single()   // '*' so columns added by later updates are optional
       .then(r => { if (r.error) throw r.error; return r.data; }),
     fetchAll('teams', id, ['created_at', 'id']),
     fetchAll('players', id, ['sort', 'id']),
-    fetchAll('games', id, ['id']),
-    fetchAll('events', id, ['seq']),
+    fetchGamesAndPlays(id, loadIds),
     sb.from('games').select('first_pull').limit(1),   // fails until supabase/005 has been run
-    sb.from('seasons').select('*').eq('league_id', id).order('number'),        // these two fail until supabase/006
-    sb.from('hall_of_fame').select('*').eq('league_id', id).order('inducted_at'),
+    sb.from('hall_of_fame').select('*').eq('league_id', id).order('inducted_at'),   // fails until supabase/006
     sb.from('games').select('stage').limit(1),   // fails until supabase/008 has been run
     sb.from('person_profiles').select('*').eq('league_id', id),   // these two fail until supabase/010
     sb.from('availability').select('*').eq('league_id', id)
@@ -525,6 +538,7 @@ async function fetchLeague(id) {
     seasonsReady: !seasons.error,    // false until supabase/006_seasons.sql has been run
     playoffsReady: !playoffProbe.error,   // false until supabase/008_playoffs.sql has been run
     seasons: seasons.data || [],
+    loadedSeasons: loadIds || 'all',   // which seasons' games and plays are in `games`
     hof: hof.data || []
   };
   for (const p of players) next.teams.find(t => t.id === p.team_id)?.players.push({
@@ -619,6 +633,40 @@ function loadLeague() {
   return loading;
 }
 let offlineData = null;   // when set, the screens are showing the device's saved copy (from this time)
+
+// ----- Past seasons, loaded when first needed -----
+// Which seasons a page needs: all of them for all-time views, otherwise the one being looked at.
+function seasonsNeeded(page, id) {
+  if (!db.seasonsReady || db.loadedSeasons === 'all') return [];
+  const all = db.seasons.map(s => s.id);
+  const need = page === 'hof' || page === 'profile' || (page === 'leaders' && leaderScope === 'all')
+    || ((page === 'box' || page === 'game') && !game(id)) ? all
+    : page === 'team' ? [team(id)?.seasonId]
+    : [viewSeason()?.id];
+  return need.filter(s => s && !db.loadedSeasons.includes(s));
+}
+
+let seasonsLoading = null, seasonLoadFailed = false;
+function loadSeasons(ids) {
+  if (!seasonsLoading) seasonsLoading = fetchGamesAndPlays(league.id, ids)
+    .then(([games, events]) => {
+      const fresh = games.map(toGame), byId = Object.fromEntries(fresh.map(g => [g.id, g]));
+      for (const e of events) byId[e.game_id]?.events.push(toEvent(e));
+      db.games = [...db.games.filter(g => !ids.includes(g.seasonId)), ...fresh];
+      db.loadedSeasons = [...new Set([...db.loadedSeasons, ...ids])];
+      saveSnapshot(league.id, db);
+    })
+    .catch(() => { seasonLoadFailed = true; toast('Couldn’t load past seasons. Showing what’s loaded so far.'); })
+    .finally(() => { seasonsLoading = null; route(); });
+  return seasonsLoading;
+}
+
+// For actions (like exporting every season) that need all the data first.
+async function withAllSeasons(fn) {
+  const missing = db.seasonsReady && db.loadedSeasons !== 'all' ? db.seasons.map(s => s.id).filter(s => !db.loadedSeasons.includes(s)) : [];
+  if (missing.length) { toast('Loading past seasons…'); await loadSeasons(missing); }
+  fn();
+}
 window.addEventListener('online', () => { if (offlineData) refreshLeague(); });
 
 // Re-fetch everything (after someone else changes teams or settings, or after reconnecting).
@@ -630,7 +678,7 @@ function refreshLeague() {
     if (writes.length) { missedRemote = true; return; } // try again once our own changes are saved
     const id = league.id, seq = writeSeq;
     try {
-      const next = await fetchLeague(id);
+      const next = await fetchLeague(id, Array.isArray(db.loadedSeasons) ? db.loadedSeasons : []);
       if (league?.id !== id) return;
       // A change made while this was loading may be missing from it: don't show stale data, load again.
       if (writes.length || writeSeq !== seq) { missedRemote = true; if (!writes.length) refreshLeague(); return; }
@@ -949,6 +997,12 @@ function route() {
     }
     return;
   }
+  const missing = seasonLoadFailed ? [] : seasonsNeeded(page, id);
+  if (missing.length) {
+    app.innerHTML = `<h1>${esc(league.name)}</h1><p class="muted">Loading past season${missing.length === 1 ? '' : 's'}…</p>`;
+    loadSeasons(missing);
+    return;
+  }
   if (page === 'game' && game(id)) return isAdmin() ? renderTracker(game(id)) : renderBox(game(id));
   if (page === 'box' && game(id)) { renderBox(game(id)); return tickClocks(); }
   if (page === 'leaders') return renderLeaders();
@@ -1011,7 +1065,7 @@ async function installApp() {
 }
 
 function enterLeague(l, m) {
-  if (league?.id !== l.id) { unsubscribeLeague(); db = emptyDb(); dataLeagueId = null; loadError = null; viewSeasonId = null; }
+  if (league?.id !== l.id) { unsubscribeLeague(); db = emptyDb(); dataLeagueId = null; loadError = null; viewSeasonId = null; seasonLoadFailed = false; }
   try { sessionStorage.removeItem('frisbee-public'); } catch {}
   league = { id: l.id, name: l.name, border_colors: l.border_colors || null }; mode = m; editing = null;
   rememberLeague();
@@ -1539,11 +1593,11 @@ function renderSettings() {
     <h2>Export</h2>
     <div class="card export-buttons">
       <span class="muted">Spreadsheet (CSV) files that open in Excel, Google Sheets or Numbers.</span>
-      <button class="small" onclick="exportGames(true)">⬇ All games, every season</button>
+      <button class="small" onclick="withAllSeasons(() => exportGames(true))">⬇ All games, every season</button>
       <button class="small" onclick="exportGames(false)">⬇ This season’s games</button>
       <button class="small" onclick="exportStandings()">⬇ Standings</button>
       <button class="small" onclick="leaderScope = 'season'; exportPlayerStats()">⬇ Player stats, this season</button>
-      ${db.seasonsReady ? '<button class="small" onclick="leaderScope = \'all\'; exportPlayerStats(); leaderScope = \'season\'">⬇ Player stats, all time</button>' : ''}
+      ${db.seasonsReady ? '<button class="small" onclick="withAllSeasons(() => { leaderScope = \'all\'; exportPlayerStats(); leaderScope = \'season\'; })">⬇ Player stats, all time</button>' : ''}
     </div>
 
     <h2>Admins</h2>
@@ -2533,7 +2587,7 @@ function sortLeaders(k) { leaderSort = k; renderLeaders(); }
 let leaderScope = 'season';   // 'season' (the one being viewed) or 'all' (every season added up, per person)
 function pickLeaderSeason(v) {
   if (v === 'all') leaderScope = 'all'; else { leaderScope = 'season'; viewSeasonId = v; }
-  renderLeaders();
+  route();   // loads the seasons it needs first
 }
 
 function renderLeaders() {
