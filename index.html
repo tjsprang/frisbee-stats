@@ -2998,9 +2998,25 @@ async function submitAuth(ev) {
     ? await sb.auth.signUp({ email, password, options: { emailRedirectTo: authUrl() } })
     : await sb.auth.signInWithPassword({ email, password });
   btn.disabled = false;
-  if (error) return authMsg(error.message, true);
+  if (error) {
+    // Never clicked (or lost) the confirmation email: offer to send a new one.
+    if (/not confirmed/i.test(error.message)) {
+      authMsg('Your email isn’t confirmed yet. Check your inbox for the link, or send a new one.', true);
+      document.getElementById('authMsg').insertAdjacentHTML('beforeend',
+        ' <button class="small" type="button" onclick="resendConfirmation()">Resend confirmation email</button>');
+      return;
+    }
+    return authMsg(error.message, true);
+  }
   // If email confirmation is on, sign-up returns no session until the link is clicked.
   if (authMode === 'signup' && !data.session) authMsg('Check your email for a confirmation link, then sign in.');
+}
+
+async function resendConfirmation() {
+  const email = document.getElementById('email').value.trim();
+  if (!email) return authMsg('Type your email above first.', true);
+  const { error } = await sb.auth.resend({ type: 'signup', email, options: { emailRedirectTo: authUrl() } });
+  authMsg(error ? error.message : 'Sent! Open the newest email and tap its link, then come back and sign in.', !!error);
 }
 
 async function forgotPassword() {
