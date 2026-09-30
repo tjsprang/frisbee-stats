@@ -244,6 +244,24 @@
   .hbar-track i { display: block; height: 100%; min-width: 4px; background: var(--series-1); border-radius: 0 4px 4px 0; }
   .hbar-val { text-align: right; font-variant-numeric: tabular-nums; }
 
+  /* Seasons and the Hall of Fame */
+  .season-picker { display: flex; align-items: center; gap: 10px; margin: 0 0 12px; }
+  .season-picker select { width: auto; flex: 1; max-width: 320px; padding: 8px 10px; }
+  .past-season { border: 2px dashed var(--line); font-size: 14px; }
+  .past-season a { color: var(--accent); display: block; margin-top: 4px; }
+  .suggest { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .suggest > div { width: 100%; }
+  .suggest button { text-align: left; white-space: normal; }
+  .option-btn { text-align: left; display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 14px; font-weight: 400; }
+  .option-btn b { font-size: 16px; }
+  .option-btn:disabled { opacity: .5; }
+  .hof-card .hof-trophy { font-size: 28px; flex: 0 0 auto; }
+  .hof-note { margin: 10px 0 0; font-style: italic; }
+  .hof-stats { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 10px; font-size: 12px; color: var(--muted); }
+  .hof-stats span { display: flex; flex-direction: column; }
+  .hof-stats b { font-size: 18px; color: var(--text); }
+  .hof-banner { display: block; color: inherit; text-decoration: none; font-weight: 700; border: 2px solid #eda100; }
+
   /* Leaders: All / Teams */
   .leader-tabs button.on { background: var(--accent); color: var(--accent-text); border-color: transparent; }
   .team-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
@@ -324,7 +342,8 @@ function seed() {
   };
 }
 
-const emptyDb = () => ({ teams: [], games: [], settings: { onField: 7 }, claims: [], claimsReady: false, passReady: false });
+const emptyDb = () => ({ teams: [], games: [], settings: { onField: 7 }, claims: [], claimsReady: false, passReady: false,
+  seasonsReady: false, seasons: [], hof: [] });
 let db = emptyDb();
 let dataLeagueId = null;   // which league `db` currently holds
 let loading = null, loadError = null, channel = null;
@@ -337,21 +356,26 @@ function rememberLeague() {
 const toGame = r => ({
   id: r.id, homeId: r.home_id, awayId: r.away_id, status: r.status, created: Number(r.created_ms),
   when: r.scheduled_at, field: r.field, round: r.round, lineup: r.lineup, pointPlayers: r.point_players,
-  firstPull: r.first_pull || null, events: []
+  firstPull: r.first_pull || null, seasonId: r.season_id || null, events: []
 });
 const toEvent = r => ({
   id: r.id, t: Number(r.t), type: r.type, teamId: r.team_id, playerId: r.player_id,
   ...(r.assist_id ? { assistId: r.assist_id } : {}), ...(r.target_id ? { targetId: r.target_id } : {}),
   ...(r.played ? { played: r.played } : {}), ...(r.detail ? { detail: r.detail } : {})
 });
-const teamRow = t => ({ id: t.id, league_id: league.id, name: t.name, color: t.color });
+// Season columns only exist once supabase/006 has been run.
+const seasonCols = x => (db.seasonsReady ? { season_id: x.seasonId || activeSeason()?.id } : {});
+const teamRow = t => ({ id: t.id, league_id: league.id, name: t.name, color: t.color, ...seasonCols(t) });
 const playerRows = t => t.players.map((p, i) => ({
-  id: p.id, league_id: league.id, team_id: t.id, name: p.name, number: String(p.number ?? ''), sort: i
+  id: p.id, league_id: league.id, team_id: t.id, name: p.name, number: String(p.number ?? ''), sort: i,
+  ...(db.seasonsReady ? { season_id: t.seasonId || activeSeason()?.id, person_id: p.personId || p.id } : {}),
+  // A player linked to someone from a past season keeps their claimed account.
+  ...(p.carryUser && p.userId ? { user_id: p.userId } : {})
 }));
 const gameRow = g => ({
   id: g.id, league_id: league.id, home_id: g.homeId, away_id: g.awayId, status: g.status, created_ms: g.created,
   scheduled_at: g.when || null, field: g.field ?? null, round: g.round ?? null,
-  lineup: g.lineup || null, point_players: g.pointPlayers || null,
+  lineup: g.lineup || null, point_players: g.pointPlayers || null, ...seasonCols(g),
   ...(db.passReady ? { first_pull: g.firstPull || null } : {})   // column added by supabase/005
 });
 const eventRow = (g, e) => ({
@@ -373,25 +397,32 @@ async function fetchAll(table, leagueId, orders) {
 }
 
 async function fetchLeague(id) {
-  const [lg, teams, players, games, events, passProbe] = await Promise.all([
+  const [lg, teams, players, games, events, passProbe, seasons, hof] = await Promise.all([
     sb.from('leagues').select('name, border_colors, on_field').eq('id', id).single()
       .then(r => { if (r.error) throw r.error; return r.data; }),
     fetchAll('teams', id, ['created_at', 'id']),
     fetchAll('players', id, ['sort', 'id']),
     fetchAll('games', id, ['id']),
     fetchAll('events', id, ['seq']),
-    sb.from('games').select('first_pull').limit(1)   // fails until supabase/005 has been run
+    sb.from('games').select('first_pull').limit(1),   // fails until supabase/005 has been run
+    sb.from('seasons').select('*').eq('league_id', id).order('number'),        // these two fail until supabase/006
+    sb.from('hall_of_fame').select('*').eq('league_id', id).order('inducted_at')
   ]);
   const claims = await fetchClaims(id);
   const next = {
-    teams: teams.map(t => ({ id: t.id, name: t.name, color: t.color, players: [] })),
+    teams: teams.map(t => ({ id: t.id, name: t.name, color: t.color, seasonId: t.season_id, players: [] })),
     games: games.map(toGame),
     settings: { onField: lg.on_field },
     claims: claims || [],
     claimsReady: !!claims,           // false until supabase/004_player_claims.sql has been run
-    passReady: !passProbe.error      // false until supabase/005_pass_by_pass.sql has been run
+    passReady: !passProbe.error,     // false until supabase/005_pass_by_pass.sql has been run
+    seasonsReady: !seasons.error,    // false until supabase/006_seasons.sql has been run
+    seasons: seasons.data || [],
+    hof: hof.data || []
   };
-  for (const p of players) next.teams.find(t => t.id === p.team_id)?.players.push({ id: p.id, name: p.name, number: p.number, userId: p.user_id || null });
+  for (const p of players) next.teams.find(t => t.id === p.team_id)?.players.push({
+    id: p.id, name: p.name, number: p.number, userId: p.user_id || null, personId: p.person_id || p.id
+  });
   const byId = Object.fromEntries(next.games.map(g => [g.id, g]));
   for (const e of events) byId[e.game_id]?.events.push(toEvent(e));
   if (league?.id === id) { league.name = lg.name; league.border_colors = lg.border_colors; rememberLeague(); }
@@ -405,10 +436,56 @@ async function fetchClaims(id) {
   return error ? null : data;
 }
 
+// ----- Seasons -----
+// db.teams and db.games hold every season; screens show the season being viewed (the active one by default).
+let viewSeasonId = null;
+const activeSeason = () => db.seasons.find(s => s.status === 'active') || null;
+const viewSeason = () => db.seasons.find(s => s.id === viewSeasonId) || activeSeason();
+const inViewSeason = x => !db.seasonsReady || x.seasonId === viewSeason()?.id;
+const inActiveSeason = x => !db.seasonsReady || x.seasonId === activeSeason()?.id;
+const seasonTeams = () => db.teams.filter(inViewSeason);
+const seasonGames = () => db.games.filter(inViewSeason);
+const viewingPast = () => db.seasonsReady && viewSeason()?.status === 'archived';
+const canEdit = () => isAdmin() && !viewingPast();   // past seasons are read-only
+const seasonName = id => db.seasons.find(s => s.id === id)?.name || '';
+
+// A dropdown to switch seasons (only once there's more than one). `extra` adds options such as "All time".
+function seasonPicker(onchange, extra = []) {
+  if (!db.seasonsReady || db.seasons.length < 2 && !extra.length) return '';
+  const current = viewingPast() || !extra.some(([v]) => v === viewSeasonId) ? viewSeason()?.id : viewSeasonId;
+  return `<label class="season-picker"><span class="muted">Season</span>
+    <select onchange="${onchange}(this.value)">
+      ${[...db.seasons].reverse().map(s => `<option value="${s.id}" ${s.id === current ? 'selected' : ''}>
+        ${esc(s.name)}${s.status === 'active' ? ' (current)' : ''}</option>`).join('')}
+      ${extra.map(([v, label, on]) => `<option value="${v}" ${on ? 'selected' : ''}>${esc(label)}</option>`).join('')}
+    </select></label>`;
+}
+function pickSeason(id) { viewSeasonId = id; editing = null; route(); }
+
+// ----- All-time identity -----
+// Each season has its own roster entry for a player; personId links them across seasons.
+const personOf = pid => allPlayers().find(p => p.id === pid)?.personId || pid;
+function personEntries(personId) {   // every season's roster entry for one person, oldest season first
+  const num = sid => db.seasons.find(s => s.id === sid)?.number || 0;
+  return allPlayers().filter(p => p.personId === personId).sort((a, b) => num(a.team.seasonId) - num(b.team.seasonId));
+}
+// Stats per person across every season.
+function allTimeStats() {
+  const an = analyze(db.games), people = {};
+  for (const [pid, s] of Object.entries(an.players)) {
+    const t = people[personOf(pid)] || (people[personOf(pid)] = ZERO());
+    for (const k of Object.keys(ZERO())) t[k] += s[k] || 0;
+  }
+  for (const s of Object.values(people)) finishPlayer(s);
+  return people;
+}
+
 // ----- Claimed players -----
 const me = () => session?.user.id;
 const allPlayers = () => db.teams.flatMap(t => t.players.map(p => ({ ...p, team: t })));
-const myPlayer = () => allPlayers().find(p => p.userId && p.userId === me());
+// Your player this season (or your most recent one, before seasons exist).
+const myPlayer = () => allPlayers().filter(p => p.userId && p.userId === me())
+  .sort((a, b) => inActiveSeason(b.team) - inActiveSeason(a.team))[0];
 const myPendingClaim = () => db.claims.find(c => c.user_id === me() && c.status === 'pending');
 const pendingClaims = () => db.claims.filter(c => c.status === 'pending');
 const teamOf = pid => db.teams.find(t => t.players.some(p => p.id === pid));
@@ -532,6 +609,10 @@ function subscribeLeague(id) {
   on('DELETE', 'games', p => remoteDelete('game', p.old.id), null);
   on('DELETE', 'teams', p => { if (team(p.old.id)) refreshLeague(); }, null);
   on('DELETE', 'players', p => { if (db.teams.some(t => t.players.some(x => x.id === p.old.id))) refreshLeague(); }, null);
+  if (db.seasonsReady) {  // only once the seasons tables exist
+    on('*', 'seasons', refreshLeague);
+    on('*', 'hall_of_fame', refreshLeague);
+  }
   if (db.claimsReady) {   // only once the claims table exists
     on('INSERT', 'player_claims', p => remoteClaim(p.new));
     on('UPDATE', 'player_claims', p => remoteClaim(p.new));
@@ -664,13 +745,14 @@ function route() {
   if (recovering) return renderNewPassword();
   if (!session) return renderLogin();
   const [page, id] = location.hash.replace(/^#\/?/, '').split('/');
-  const inLeague = !!(league && mode) && ['games', 'game', 'box', 'leaders', 'teams', 'schedule', 'settings', 'profile', 'team'].includes(page);
+  const inLeague = !!(league && mode) && ['games', 'game', 'box', 'leaders', 'teams', 'schedule', 'settings', 'profile', 'team', 'hof'].includes(page);
   document.body.classList.toggle('no-nav', !inLeague);
   document.body.classList.toggle('player', !isAdmin());
   document.getElementById('modeTag').textContent = inLeague ? (isAdmin() ? 'Admin' : 'Player') : '';
   document.querySelectorAll('[data-nav]').forEach(a =>
     a.classList.toggle('on', (a.dataset.nav === 'games' && ['games', 'game', 'box', 'schedule', 'settings'].includes(page))
-      || (a.dataset.nav === 'teams' && (page === 'profile' || page === 'team')) || a.dataset.nav === page));
+      || (a.dataset.nav === 'teams' && (page === 'profile' || page === 'team'))
+      || (a.dataset.nav === 'leaders' && page === 'hof') || a.dataset.nav === page));
   if (page === 'admin') return id === 'create' ? renderCreateLeague() : renderAdminHome();
   if (page === 'player') return renderPlayerHome();
   if (!inLeague) return renderMenu();
@@ -690,6 +772,7 @@ function route() {
   if (page === 'teams') return isAdmin() ? renderTeams() : renderRosters();
   if (page === 'profile') return renderProfile(id);
   if (page === 'team') return renderTeamPage(id);
+  if (page === 'hof') return renderHallOfFame();
   if (page === 'schedule' && isAdmin()) return renderSchedule();
   if (page === 'settings' && isAdmin()) return renderSettings();
   renderGames();
@@ -720,7 +803,7 @@ function renderMenu() {
 }
 
 function enterLeague(l, m) {
-  if (league?.id !== l.id) { unsubscribeLeague(); db = emptyDb(); dataLeagueId = null; loadError = null; }
+  if (league?.id !== l.id) { unsubscribeLeague(); db = emptyDb(); dataLeagueId = null; loadError = null; viewSeasonId = null; }
   league = { id: l.id, name: l.name, border_colors: l.border_colors || null }; mode = m; editing = null;
   rememberLeague();
   try { localStorage.setItem('frisbee-mode', m); } catch {}
@@ -940,7 +1023,7 @@ function gameCard(g) {
       <div><span class="dot" style="background:${a.color}"></span>${esc(a.name)} ${upcoming ? '' : `<b>${score(g, a.id)}</b>`}</div>
       <div class="muted">${upcoming ? `${fmtWhen(g.when)} · Field ${g.field} · Round ${g.round}` : new Date(g.created).toLocaleDateString()}</div>
     </div>`;
-  if (upcoming) return `<div class="card game-link">${info}${isAdmin()
+  if (upcoming) return `<div class="card game-link">${info}${canEdit()
     ? `<button class="small primary" onclick="startScheduled('${g.id}')">Start</button>`
     : '<span class="badge scheduled">UPCOMING</span>'}</div>`;
   return `<a class="card game-link" href="#/${g.status === 'live' && isAdmin() ? 'game' : 'box'}/${g.id}">
@@ -948,10 +1031,12 @@ function gameCard(g) {
 }
 
 function renderGames() {
-  const opts = db.teams.map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join('');
-  const live = db.games.filter(g => g.status === 'live').sort((a, b) => b.created - a.created);
-  const upcoming = db.games.filter(g => g.status === 'scheduled').sort((a, b) => a.when.localeCompare(b.when));
-  const results = db.games.filter(g => g.status === 'final').sort((a, b) => b.created - a.created);
+  const teams = seasonTeams(), games = seasonGames(), edit = canEdit();
+  const opts = teams.map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join('');
+  const live = games.filter(g => g.status === 'live').sort((a, b) => b.created - a.created);
+  const upcoming = games.filter(g => g.status === 'scheduled').sort((a, b) => a.when.localeCompare(b.when));
+  const results = games.filter(g => g.status === 'final').sort((a, b) => b.created - a.created);
+  const s = viewSeason();
   app.innerHTML = `
     <div class="card" style="${borderStyle(league.border_colors)}">
       <div class="row">
@@ -959,7 +1044,11 @@ function renderGames() {
         ${isAdmin() ? '<a class="btn small" href="#/settings">⚙️ Settings</a>' : ''}
         <a class="btn small" href="#/${isAdmin() ? 'admin' : 'player'}">Switch league</a>
       </div>
+      ${s ? `<div class="muted" style="margin-top:4px">${esc(s.name)}${s.status === 'archived' ? ' · finished' : ''}</div>` : ''}
     </div>
+    ${seasonPicker('pickSeason')}
+    ${viewingPast() ? `<div class="card past-season">📚 You’re looking at <b>${esc(s.name)}</b>, a finished season. Its stats are saved and can’t be changed.
+      <a href="#/games" onclick="pickSeason('${activeSeason()?.id}'); return false">Back to the current season →</a></div>` : ''}
     ${isAdmin() && legacyData() ? `<div class="card" style="border:2px solid var(--accent)">
       <b>Teams and games found on this device</b>
       <div class="muted">Before leagues were shared, this browser saved ${legacyData().teams?.length || 0} teams and
@@ -970,10 +1059,10 @@ function renderGames() {
       </div>
     </div>` : ''}
     ${isAdmin() ? claimRequestsCard() : myStatsCard()}
-    ${isAdmin() && db.teams.length < 2 ? `<div class="card">
+    ${edit && teams.length < 2 ? `<div class="card">
       <b>Add your teams first</b>
       <div class="muted">You need at least two teams to start a game. Add them on the <a href="#/teams">Teams</a> tab.</div>
-    </div>` : isAdmin() ? `<div class="card">
+    </div>` : edit ? `<div class="card">
       <div class="muted" style="margin-bottom:8px">Start a new game</div>
       <div class="row">
         <select id="home">${opts}</select>
@@ -983,13 +1072,13 @@ function renderGames() {
       <button class="primary" style="width:100%;margin-top:10px" onclick="newGame()">Start tracking</button>
     </div>
     <a class="btn" style="display:block;margin-bottom:12px" href="#/schedule">📅 Schedule creator</a>` : ''}
-    ${db.games.length ? '' : `<p class="muted">No games yet.${isAdmin() && db.teams.length >= 2 ? ' Start one above, or build a season with the schedule creator.' : ''}</p>`}
+    ${games.length ? '' : `<p class="muted">No games yet.${edit && teams.length >= 2 ? ' Start one above, or build a season with the schedule creator.' : ''}</p>`}
     ${live.length ? `<h2>Live now</h2>${live.map(gameCard).join('')}` : ''}
     ${upcoming.length ? `<div class="row"><h2>Upcoming</h2>
-      ${isAdmin() ? '<button class="small" onclick="clearSchedule()">Clear schedule</button>' : ''}</div>
+      ${edit ? '<button class="small" onclick="clearSchedule()">Clear schedule</button>' : ''}</div>
       ${upcoming.map(gameCard).join('')}` : ''}
     ${results.length ? `<h2>Results</h2>${results.map(gameCard).join('')}` : ''}`;
-  if (document.getElementById('away')) document.getElementById('away').value = db.teams[1].id;
+  if (document.getElementById('away')) document.getElementById('away').value = teams[1].id;
 }
 
 // ---------- Player claims ----------
@@ -1035,7 +1124,7 @@ function myStatsCard() {
   if (!db.claimsReady) return '';
   const mine = myPlayer(), pending = myPendingClaim();
   if (mine) {
-    const s = statsOf(analyze(db.games), mine.id);
+    const s = statsOf(analyze(db.games.filter(g => g.seasonId === mine.team.seasonId || !db.seasonsReady)), mine.id);
     return `<a class="card game-link" href="#/profile/${mine.id}">
       <span><span class="muted">Your stats · #${esc(mine.number)} ${esc(mine.name)}</span><br>
         <b>${s.g} G · ${s.a} A · ${s.d} D · ${s.to} TO</b> <span class="muted">· ${s.pm >= 0 ? '+' : ''}${s.pm}</span></span>
@@ -1082,18 +1171,21 @@ const claimedBy = pid => db.claims.find(c => c.player_id === pid && c.status ===
 
 // Read-only rosters for players, with Claim buttons.
 function renderRosters() {
-  const mine = myPlayer(), pending = myPendingClaim();
-  const canClaim = db.claimsReady && !mine && !pending;
+  // Claims belong to a season, so only this season's rosters can be claimed.
+  const teams = seasonTeams(), pending = myPendingClaim();
+  const mine = allPlayers().find(p => p.userId && p.userId === me() && inViewSeason(p.team));
+  const canClaim = db.claimsReady && !viewingPast() && !mine && !pending;
   app.innerHTML = `
     <h1>Teams</h1>
-    ${!db.claimsReady ? '' : mine
+    ${seasonPicker('pickSeason')}
+    ${!db.claimsReady || viewingPast() ? '' : mine
       ? `<div class="card"><b>You’re #${esc(mine.number)} ${esc(mine.name)} on ${esc(mine.team.name)}.</b>
           <div class="muted"><a href="#/profile/${mine.id}">View your stats →</a></div></div>`
       : pending ? `<div class="card"><b>Claim pending</b><div class="muted">Waiting for an admin to approve you as
           ${esc(player(pending.player_id).name)}.</div></div>`
       : '<p class="muted">Find yourself on a roster and tap <b>Claim</b>. Once a league admin approves it, you can follow your own stats.</p>'}
-    ${db.teams.length ? '' : '<p class="muted">No teams yet.</p>'}
-    ${db.teams.map(t => `
+    ${teams.length ? '' : '<p class="muted">No teams yet.</p>'}
+    ${teams.map(t => `
       <div class="card">
         <h2 style="margin-top:0"><a href="#/team/${t.id}" style="color:inherit"><span class="dot" style="background:${esc(t.color)}"></span>${esc(t.name)}</a></h2>
         ${t.players.length ? `<ul class="roster">${t.players.map(p => `
@@ -1131,11 +1223,31 @@ function renderProfile(pid) {
       <span class="hbar-track"><i style="width:${(n / list[0][1]) * 100}%"></i></span><span class="hbar-val">${n}</span></div>`).join('')}
     <div class="muted" style="font-size:12px;margin-top:6px">Completed passes ${verb}, including goals.</div></div>` : '';
 
+  // All-time: every season this person played (linked by personId).
+  const entries = db.seasonsReady ? personEntries(p.personId) : [p];
+  const hof = db.hof.find(h => h.person_id === p.personId);
+  const allTime = entries.length > 1 ? (() => {
+    const at = allTimeStats()[p.personId] || finishPlayer(ZERO());
+    const perSeason = entries.map(e => {
+      const games = db.games.filter(g => g.status !== 'scheduled' && (g.homeId === e.team.id || g.awayId === e.team.id));
+      return { ...e, name: seasonName(e.team.seasonId), gp: games.length, ...statsOf(analyze(games), e.id) };
+    }).reverse();
+    return `<h2>All time · ${entries.length} seasons</h2>
+      ${tiles([['Goals', at.g], ['Assists', at.a], ['Ds', at.d], ['Points played', at.pp], ['Plus/minus', signed(at.pm)], ['Throw %', fmtPct(at.thp)]])}
+      <div class="card">${statTable(perSeason, [
+        { k: 'name', h: 'Season', l: true, f: r => `<a href="#/profile/${r.id}" style="color:inherit">${esc(r.name)}</a>
+          <div class="muted" style="font-size:12px">${esc(r.team.name)}</div>` },
+        { k: 'gp', h: 'GP' }, { k: 'pp', h: 'PP' }, { k: 'g', h: 'G' }, { k: 'a', h: 'A' }, { k: 'd', h: 'D' }, { k: 'pm', h: '+/-' }])}</div>`;
+  })() : '';
+
   app.innerHTML = `
     <div class="row"><h1>#${esc(p.number)} ${esc(p.name)}</h1>
       ${p.userId === me() ? '<span class="badge you" style="flex:0 0 auto">YOU</span>' : ''}</div>
+    ${hof ? `<a class="card hof-banner" href="#/hof">🏆 Hall of Fame${hof.note ? ` · “${esc(hof.note)}”` : ''}</a>` : ''}
     <p class="muted"><a href="#/team/${t.id}" style="color:inherit"><span class="dot" style="background:${esc(t.color)}"></span>${esc(t.name)}</a>
-      · ${played.length} game${played.length === 1 ? '' : 's'}</p>
+      ${db.seasonsReady ? `· ${esc(seasonName(t.seasonId))}` : ''} · ${played.length} game${played.length === 1 ? '' : 's'}</p>
+    ${allTime}
+    ${allTime ? `<h2 style="margin-top:26px">${esc(seasonName(t.seasonId))}</h2>` : ''}
     <h2>Offense</h2>
     ${tiles([['Goals', s.g], ['Assists', s.a], ['Hockey assists', s.ha], ['Touches', s.tou]])}
     <h2>Passing and receiving</h2>
@@ -1174,7 +1286,57 @@ function renderSettings() {
     <div class="card row" style="${borderStyle(league.border_colors)}">
       <b>${esc(league.name)}</b>
       <button class="small" onclick="openBorderEditor()">🎨 Edit border</button>
-    </div>`;
+    </div>
+
+    ${db.seasonsReady && activeSeason() ? (() => {
+      const s = activeSeason(), games = db.games.filter(inActiveSeason);
+      const played = games.filter(g => g.status === 'final').length, live = games.filter(g => g.status === 'live').length;
+      return `<h2>Season</h2>
+      <div class="card">
+        <b>${esc(s.name)}</b> <span class="muted">· started ${new Date(s.started_at).toLocaleDateString()} · ${played} game${played === 1 ? '' : 's'} played</span>
+        <p class="muted">When the season is over, start the next one. ${esc(s.name)}’s stats are kept (and count toward all-time stats); it just can’t be changed anymore.</p>
+        ${live ? `<p class="msg error">Finish or delete the ${live} live game${live === 1 ? '' : 's'} first.</p>` : ''}
+        <button class="primary" style="width:100%" ${live ? 'disabled' : ''} onclick="openNewSeason()">🏁 End ${esc(s.name)} and start a new season</button>
+      </div>
+      <a class="card game-link" href="#/hof"><span><b>🏆 Hall of Fame</b><br><span class="muted">${db.hof.length} inducted · induct players at the end of each season</span></span><span class="muted">→</span></a>`;
+    })() : ''}`;
+}
+
+// ---------- New season ----------
+function openNewSeason() {
+  const s = activeSeason(), teams = db.teams.filter(inActiveSeason);
+  const scheduled = db.games.filter(g => inActiveSeason(g) && g.status === 'scheduled').length;
+  openSheet(`
+    <h3>Start a new season</h3>
+    <p class="muted">${esc(s.name)} ends and its stats are saved. ${scheduled ? `Its ${scheduled} unplayed scheduled game${scheduled === 1 ? ' is' : 's are'} removed.` : ''}</p>
+    <label class="field">Name of the new season
+      <input id="season-name" value="Season ${s.number + 1}" maxlength="60"></label>
+    <div class="options" style="margin-top:14px">
+      <button class="card option-btn" onclick="startNewSeason(false)">
+        <b>🆕 Start from scratch</b>
+        <span class="muted">No teams. When you add players, returning players can be linked by name so their all-time stats carry on.</span>
+      </button>
+      <button class="card option-btn" onclick="startNewSeason(true)" ${teams.length ? '' : 'disabled'}>
+        <b>🔁 Use the same teams</b>
+        <span class="muted">Copies all ${teams.length} team${teams.length === 1 ? '' : 's'} and their rosters. Stats start at zero; all-time stats carry on.</span>
+      </button>
+    </div>
+    <div class="msg error" id="season-msg"></div>
+    <button style="width:100%;margin-top:10px" onclick="closeSheet()">Cancel</button>`);
+}
+
+async function startNewSeason(copyTeams) {
+  const old = activeSeason(), name = document.getElementById('season-name').value.trim();
+  if (!confirm(`End ${old.name} and start ${name || 'the new season'}${copyTeams ? ' with the same teams' : ' from scratch'}? This can’t be undone.`)) return;
+  if (writes.length) return (document.getElementById('season-msg').textContent = 'Some changes are still saving. Try again in a moment.');
+  const { data, error } = await sb.rpc('start_new_season', { p_league_id: league.id, p_name: name, p_copy_teams: copyTeams });
+  if (error) return (document.getElementById('season-msg').textContent = dbErrorText(error));
+  closeSheet();
+  viewSeasonId = null; hofPicking = true; hofQuery = '';
+  dataLeagueId = null;   // reload everything (the new season, and any copied teams)
+  toast(`🏁 ${old.name} is in the books. ${data.name} has started! Induct anyone from ${old.name} into the Hall of Fame.`);
+  location.hash = '#/hof';
+  route();
 }
 
 function setOnField(delta) {
@@ -1192,11 +1354,10 @@ function startScheduled(id) {
 }
 
 function clearSchedule() {
-  const n = db.games.filter(g => g.status === 'scheduled').length;
-  if (!confirm(`Remove all ${n} upcoming scheduled games? Live and finished games are kept.`)) return;
-  db.games = db.games.filter(g => g.status !== 'scheduled');
-  const leagueId = league.id;
-  persist(() => sb.from('games').delete().eq('league_id', leagueId).eq('status', 'scheduled'));
+  const ids = seasonGames().filter(g => g.status === 'scheduled').map(g => g.id);
+  if (!confirm(`Remove all ${ids.length} upcoming scheduled games? Live and finished games are kept.`)) return;
+  db.games = db.games.filter(g => !ids.includes(g.id));
+  persist(() => sb.from('games').delete().in('id', ids));
   renderGames();
 }
 
@@ -1239,7 +1400,7 @@ function shuffled(arr) {
 }
 
 function buildRounds(s) {
-  const ids = db.teams.map(t => t.id);
+  const ids = seasonTeams().map(t => t.id);
   const base = roundRobin(s.shuffle ? shuffled(ids) : ids);
   if (s.type === 'single') return base;
   if (s.type === 'double') return [...base, ...base.map(flipRound)];
@@ -1249,9 +1410,9 @@ function buildRounds(s) {
 }
 
 function renderSchedule() {
-  if (db.teams.length < 2) { location.hash = '#/games'; return; }
+  if (seasonTeams().length < 2 || !canEdit()) { location.hash = '#/games'; return; }
   sched = sched || { type: 'single', rounds: 8, shuffle: false, start: localDate(new Date()), time: '18:00', every: 7, fields: 1, length: 60 };
-  const n = db.teams.length;
+  const n = seasonTeams().length;
   const perRound = n % 2 ? n : n - 1;           // rounds in one full round robin
   const single = n * (n - 1) / 2;               // games in one full round robin
   const opt = (value, title, text) => `
@@ -1261,7 +1422,7 @@ function renderSchedule() {
     </label>`;
   app.innerHTML = `
     <div class="row"><h1>Schedule creator</h1><a class="btn small" href="#/games">← Games</a></div>
-    <p class="muted">${n} teams: ${db.teams.map(t => esc(t.name)).join(', ')}.${n % 2 ? ' With an odd number of teams, one team has a bye each round.' : ''}</p>
+    <p class="muted">${n} teams: ${seasonTeams().map(t => esc(t.name)).join(', ')}.${n % 2 ? ' With an odd number of teams, one team has a bye each round.' : ''}</p>
 
     <h2>1. Pick a format</h2>
     <div class="options">
@@ -1327,9 +1488,9 @@ function previewHtml() {
   const games = schedPreview.flatMap(r => r.games);
   const perTeam = {};
   games.forEach(g => { perTeam[g.homeId] = (perTeam[g.homeId] || 0) + 1; perTeam[g.awayId] = (perTeam[g.awayId] || 0) + 1; });
-  const counts = db.teams.map(t => perTeam[t.id] || 0);
+  const counts = seasonTeams().map(t => perTeam[t.id] || 0);
   const min = Math.min(...counts), max = Math.max(...counts);
-  const existing = db.games.filter(g => g.status === 'scheduled').length;
+  const existing = seasonGames().filter(g => g.status === 'scheduled').length;
   const time = w => new Date(w).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
   return `
     <h2>Preview</h2>
@@ -1353,11 +1514,13 @@ function previewHtml() {
 
 function saveSchedule(replace) {
   if (replace && !confirm('Remove the current upcoming games and use this schedule instead?')) return;
-  const leagueId = league.id, added = schedPreview.flatMap(r => r.games), rows = added.map(gameRow);
-  if (replace) db.games = db.games.filter(g => g.status !== 'scheduled');
+  const added = schedPreview.flatMap(r => r.games).map(g => ({ ...g, seasonId: activeSeason()?.id || null }));
+  const rows = added.map(gameRow);
+  const oldIds = replace ? seasonGames().filter(g => g.status === 'scheduled').map(g => g.id) : [];
+  db.games = db.games.filter(g => !oldIds.includes(g.id));
   db.games.push(...added);
   persist(steps(
-    ...(replace ? [() => sb.from('games').delete().eq('league_id', leagueId).eq('status', 'scheduled')] : []),
+    ...(oldIds.length ? [() => sb.from('games').delete().in('id', oldIds)] : []),
     () => sb.from('games').upsert(rows)
   ));
   schedPreview = null;
@@ -1367,7 +1530,7 @@ function saveSchedule(replace) {
 function newGame() {
   const homeId = document.getElementById('home').value, awayId = document.getElementById('away').value;
   if (homeId === awayId) return alert('Pick two different teams.');
-  const g = { id: uid(), homeId, awayId, created: Date.now(), status: 'live', events: [] };
+  const g = { id: uid(), homeId, awayId, created: Date.now(), status: 'live', events: [], seasonId: activeSeason()?.id || null };
   db.games.push(g); saveGame(g);
   location.hash = `#/game/${g.id}`;
 }
@@ -1898,7 +2061,7 @@ function renderBox(g) {
       <button class="${boxTab === 'points' ? 'on' : ''}" onclick="boxTab = 'points'; route()">Points</button>
     </div>
     ${boxTab === 'points' ? pointsTab : statsTab}
-    ${isAdmin() ? `<div class="row">
+    ${isAdmin() && (!db.seasonsReady || inActiveSeason(g)) ? `<div class="row">
       ${g.status === 'live'
         ? `<a class="btn primary" href="#/game/${g.id}">Back to tracking</a>`
         : `<button onclick="reopen('${g.id}')">Reopen game</button>`}
@@ -1919,23 +2082,33 @@ let leaderSort = 'pm';
 let leaderView = 'all', leaderTeamId = null;   // 'all' players, or one 'team'
 function sortLeaders(k) { leaderSort = k; renderLeaders(); }
 
+let leaderScope = 'season';   // 'season' (the one being viewed) or 'all' (every season added up, per person)
+function pickLeaderSeason(v) {
+  if (v === 'all') leaderScope = 'all'; else { leaderScope = 'season'; viewSeasonId = v; }
+  renderLeaders();
+}
+
 function renderLeaders() {
-  const an = analyze(db.games);
+  if (leaderScope === 'all' && db.seasonsReady) return renderAllTimeLeaders();
+  const teams = seasonTeams(), games = seasonGames();
+  const an = analyze(games);
   // "Teams" view: pick a team (defaults to your own claimed team, else the first one).
-  if (leaderView === 'team' && !team(leaderTeamId)) leaderTeamId = myPlayer()?.team.id || db.teams[0]?.id;
+  if (leaderView === 'team' && !teams.some(x => x.id === leaderTeamId)) leaderTeamId = teams.find(x => x.players.some(p => p.userId === me()))?.id || teams[0]?.id;
   const t = leaderView === 'team' ? team(leaderTeamId) : null;
   leaderSort = sortKeyFor(leaderSort);
-  const rows = sortRows((t ? [t] : db.teams).flatMap(tm => tm.players.map(p => ({ ...p, team: tm, ...statsOf(an, p.id) }))), leaderSort);
-  const played = db.games.filter(g => g.status !== 'scheduled' && (!t || g.homeId === t.id || g.awayId === t.id));
+  const rows = sortRows((t ? [t] : teams).flatMap(tm => tm.players.map(p => ({ ...p, team: tm, ...statsOf(an, p.id) }))), leaderSort);
+  const played = games.filter(g => g.status !== 'scheduled' && (!t || g.homeId === t.id || g.awayId === t.id));
   const ts = t && an.teams[t.id];
+  const db_teams = teams;
   app.innerHTML = `
-    <h1>Season leaders</h1>
+    <div class="row"><h1>Leaders</h1>${db.seasonsReady ? '<a class="btn small" href="#/hof">🏆 Hall of Fame</a>' : ''}</div>
+    ${seasonPicker('pickLeaderSeason', [['all', 'All time', false]])}
     <div class="tabs leader-tabs">
       <button class="${t ? '' : 'on'}" onclick="leaderView = 'all'; renderLeaders()">All</button>
       <button class="${t ? 'on' : ''}" onclick="leaderView = 'team'; renderLeaders()">Teams</button>
     </div>
-    ${leaderView === 'team' ? (db.teams.length ? `
-      <div class="team-chips">${db.teams.map(x => `
+    ${leaderView === 'team' ? (db_teams.length ? `
+      <div class="team-chips">${db_teams.map(x => `
         <button class="${x.id === t.id ? 'on' : ''}" style="--c:${esc(x.color)}"
           onclick="leaderTeamId = '${x.id}'; renderLeaders()"><span class="dot" style="background:${esc(x.color)}"></span>${esc(x.name)}</button>`).join('')}
       </div>
@@ -1948,6 +2121,97 @@ function renderLeaders() {
     ${rows.length ? `<div class="card">${statTable(rows, statCols(playerNameCol()), leaderSort, 'sortLeaders')}</div>`
       : t ? '<p class="muted">This team has no players yet.</p>' : ''}
     ${statFootnote}`;
+}
+
+// Every season added up, one row per person (their latest name and team).
+function renderAllTimeLeaders() {
+  const people = allTimeStats();
+  leaderSort = sortKeyFor(leaderSort);
+  const byPerson = {};
+  for (const p of allPlayers()) byPerson[p.personId] = [...(byPerson[p.personId] || []), p];
+  const rows = sortRows(Object.entries(byPerson).map(([personId, entries]) => {
+    const latest = entries.sort((a, b) => (db.seasons.find(s => s.id === b.team.seasonId)?.number || 0) - (db.seasons.find(s => s.id === a.team.seasonId)?.number || 0))[0];
+    return { ...latest, seasons: new Set(entries.map(e => e.team.seasonId)).size, ...(people[personId] || finishPlayer(ZERO())),
+      inHof: db.hof.some(h => h.person_id === personId) };
+  }), leaderSort);
+  const nameCol = { k: 'name', h: 'Player', l: true, f: r => `<a href="#/profile/${r.id}" style="color:inherit">${r.inHof ? '🏆 ' : ''}${esc(r.name)}</a>
+    <div class="muted" style="font-size:12px">${r.seasons} season${r.seasons === 1 ? '' : 's'}</div>` };
+  app.innerHTML = `
+    <div class="row"><h1>Leaders</h1><a class="btn small" href="#/hof">🏆 Hall of Fame</a></div>
+    ${seasonPicker('pickLeaderSeason', [['all', 'All time', true]])}
+    <p class="muted">All-time stats across ${db.seasons.length} season${db.seasons.length === 1 ? '' : 's'}. Players linked across seasons are added up as one person.</p>
+    ${statCatTabs('renderLeaders()')}
+    ${rows.length ? `<div class="card">${statTable(rows, statCols(nameCol), leaderSort, 'sortLeaders')}</div>` : '<p class="muted">No players yet.</p>'}
+    ${statFootnote}`;
+}
+
+// ---------- Hall of Fame ----------
+let hofPicking = false, hofQuery = '';
+
+function renderHallOfFame() {
+  if (!db.seasonsReady) { location.hash = '#/leaders'; return; }
+  const people = allTimeStats();
+  const card = h => {
+    const s = people[h.person_id] || finishPlayer(ZERO()), entries = personEntries(h.person_id), latest = entries.at(-1);
+    return `<div class="card hof-card">
+      <div class="row"><span class="hof-trophy">🏆</span>
+        <span style="flex:1"><b>${latest ? `<a href="#/profile/${latest.id}" style="color:inherit">${esc(h.name)}</a>` : esc(h.name)}</b>
+          <div class="muted" style="font-size:13px">Inducted${h.season_id ? ` after ${esc(seasonName(h.season_id))}` : ''} ·
+            ${entries.length} season${entries.length === 1 ? '' : 's'}${latest ? ` · ${esc(latest.team.name)}` : ''}</div></span>
+        ${isAdmin() ? `<button class="small" onclick="removeFromHof('${h.id}')">Remove</button>` : ''}</div>
+      ${h.note ? `<p class="hof-note">“${esc(h.note)}”</p>` : ''}
+      <div class="hof-stats">${[['Goals', s.g], ['Assists', s.a], ['Ds', s.d], ['Points', s.pp], ['+/-', s.pm > 0 ? `+${s.pm}` : s.pm]]
+        .map(([k, v]) => `<span><b>${v}</b>${k}</span>`).join('')}</div>
+    </div>`;
+  };
+  // Admins pick inductees from everyone who has played, best all-time +/- first.
+  const candidates = () => {
+    const seen = new Set(db.hof.map(h => h.person_id)), latest = {};
+    for (const p of allPlayers()) {
+      const num = db.seasons.find(s => s.id === p.team.seasonId)?.number || 0;
+      if (!seen.has(p.personId) && (!latest[p.personId] || num > latest[p.personId].num)) latest[p.personId] = { ...p, num };
+    }
+    const q = hofQuery.trim().toLowerCase();
+    return Object.values(latest).filter(p => !q || p.name.toLowerCase().includes(q))
+      .map(p => ({ ...p, s: people[p.personId] || finishPlayer(ZERO()) }))
+      .sort((a, b) => b.s.pm - a.s.pm || b.s.g - a.s.g).slice(0, 40);
+  };
+  app.innerHTML = `
+    <div class="row"><h1>🏆 Hall of Fame</h1><a class="btn small" href="#/leaders">← Leaders</a></div>
+    <p class="muted">${esc(league.name)}’s greatest players, with their all-time stats.</p>
+    ${db.hof.length ? [...db.hof].reverse().map(card).join('') : '<div class="card muted">No one has been inducted yet.</div>'}
+    ${isAdmin() ? (hofPicking ? `
+      <h2>Induct a player</h2>
+      <input id="hof-q" placeholder="Search players" value="${esc(hofQuery)}" autocomplete="off"
+        oninput="hofQuery = this.value; renderHallOfFame(); const i = document.getElementById('hof-q'); i.focus(); i.setSelectionRange(i.value.length, i.value.length)">
+      <div class="card" style="margin-top:10px">${candidates().map(p => `
+        <div class="claim-row"><span><b>${esc(p.name)}</b> <span class="muted">· ${esc(p.team.name)} · ${esc(seasonName(p.team.seasonId))}</span>
+          <div class="muted" style="font-size:12px">All time: ${p.s.g} G · ${p.s.a} A · ${p.s.d} D · ${p.s.pm > 0 ? '+' : ''}${p.s.pm}</div></span>
+          <button class="small primary" onclick="induct('${p.personId}')">Induct</button></div>`).join('') || '<div class="muted">No players match.</div>'}
+      </div>
+      <button style="width:100%" onclick="hofPicking = false; renderHallOfFame()">Done</button>`
+    : '<button class="primary" style="width:100%;margin-top:6px" onclick="hofPicking = true; renderHallOfFame()">+ Induct players</button>') : ''}`;
+}
+
+function induct(personId) {
+  const latest = personEntries(personId).at(-1);
+  const note = prompt(`Induct ${latest.name} into the Hall of Fame.\n\nAdd a short note (optional), e.g. “3× league MVP”:`, '');
+  if (note === null) return;
+  const archived = db.seasons.filter(s => s.status === 'archived').at(-1);
+  const row = { id: uid(), league_id: league.id, person_id: personId, name: latest.name,
+    season_id: archived?.id || activeSeason()?.id || null, note: note.trim().slice(0, 280) || null, inducted_at: new Date().toISOString() };
+  db.hof.push(row);
+  persist(() => sb.from('hall_of_fame').upsert(row));   // upsert: safe to retry after a dropped connection
+  toast(`🏆 ${latest.name} is in the Hall of Fame!`);
+  renderHallOfFame();
+}
+
+function removeFromHof(id) {
+  const h = db.hof.find(x => x.id === id);
+  if (!confirm(`Remove ${h.name} from the Hall of Fame?`)) return;
+  db.hof = db.hof.filter(x => x.id !== id);
+  persist(() => sb.from('hall_of_fame').delete().eq('id', id));
+  renderHallOfFame();
 }
 
 // ---------- Team stats page ----------
@@ -1993,11 +2257,14 @@ function renderTeamPage(tid) {
 let editing = null;
 
 function renderTeams() {
+  const teams = seasonTeams(), edit = canEdit();
   app.innerHTML = `
     <h1>Teams</h1>
-    ${db.teams.length ? '' : '<p class="muted">No teams yet. Add your first team below.</p>'}
-    ${db.teams.map(t => editing && editing.id === t.id ? teamEditor(editing) : teamCard(t)).join('')}
-    <div class="card">
+    ${seasonPicker('pickSeason')}
+    ${viewingPast() ? `<div class="card past-season">📚 ${esc(viewSeason().name)} is finished, so its teams can’t be changed.</div>` : ''}
+    ${teams.length ? '' : `<p class="muted">No teams yet.${edit ? ' Add your first team below.' : ''}</p>`}
+    ${teams.map(t => editing && editing.id === t.id ? teamEditor(editing) : teamCard(t, edit)).join('')}
+    ${edit ? `<div class="card">
       <div class="muted" style="margin-bottom:8px">Add a team</div>
       <div class="row">
         <input id="tn" placeholder="Team name">
@@ -2005,16 +2272,16 @@ function renderTeams() {
         <button class="primary" style="flex:0 0 auto" onclick="addTeam()">Add</button>
       </div>
     </div>
-    <button onclick="resetAll()" style="width:100%">Replace with sample teams</button>`;
+    <button onclick="resetAll()" style="width:100%">Replace this season’s teams with sample teams</button>` : ''}`;
 }
 
-function teamCard(t) {
+function teamCard(t, edit = true) {
   return `
     <div class="card">
       <div class="row" style="margin-bottom:6px">
         <h2 style="margin:0;flex:1"><a href="#/team/${t.id}" style="color:inherit"><span class="dot" style="background:${esc(t.color)}"></span>${esc(t.name)}</a></h2>
-        <button class="small" onclick="editTeam('${t.id}')">Edit</button>
-        <button class="small danger" onclick="deleteTeamById('${t.id}')">Delete</button>
+        ${edit ? `<button class="small" onclick="editTeam('${t.id}')">Edit</button>
+        <button class="small danger" onclick="deleteTeamById('${t.id}')">Delete</button>` : ''}
       </div>
       ${t.players.length ? `<ul class="roster">${t.players.map(p => `
         <li><a href="#/profile/${p.id}" style="color:inherit;text-decoration:none"><span class="muted">#${esc(p.number)}</span> ${esc(p.name)}</a>
@@ -2044,9 +2311,11 @@ function teamEditor(t) {
       </ul>
       <div class="row">
         <input id="new-num" placeholder="#" inputmode="numeric" style="flex:0 0 64px">
-        <input id="new-name" placeholder="New player name" onkeydown="if (event.key === 'Enter') draftAddPlayer()">
+        <input id="new-name" placeholder="New player name" autocomplete="off"
+          oninput="suggestPlayers(this.value)" onkeydown="if (event.key === 'Enter') draftAddPlayer()">
         <button class="small" onclick="draftAddPlayer()">Add</button>
       </div>
+      <div id="suggest"></div>
       <div class="row" style="margin-top:18px">
         <button onclick="deleteTeam()">Delete team</button>
         <button onclick="cancelEdit()">Cancel</button>
@@ -2067,6 +2336,41 @@ function draftAddPlayer() {
   editing.players.push({ id: uid(), name, number: document.getElementById('new-num').value.trim() });
   renderTeams();
   document.getElementById('new-num').focus();
+}
+
+// While typing a new player's name, offer players from past seasons with a matching name. Picking one
+// links them to that person, so their all-time stats continue while this season's stats start fresh.
+function returningPlayers(query) {
+  const q = query.trim().toLowerCase();
+  if (q.length < 2 || !db.seasonsReady) return [];
+  const here = new Set([...seasonTeams().flatMap(t => t.players), ...editing.players].map(p => p.personId || p.id));
+  const latest = {};   // personId → their most recent past-season roster entry
+  for (const p of allPlayers()) {
+    if (inActiveSeason(p.team) || here.has(p.personId)) continue;
+    if (!p.name.toLowerCase().includes(q)) continue;
+    const num = db.seasons.find(s => s.id === p.team.seasonId)?.number || 0;
+    if (!latest[p.personId] || num > latest[p.personId].num) latest[p.personId] = { ...p, num };
+  }
+  return Object.values(latest).sort((a, b) => a.name.localeCompare(b.name)).slice(0, 6);
+}
+
+function suggestPlayers(query) {
+  const box = document.getElementById('suggest');
+  const list = returningPlayers(query);
+  box.innerHTML = list.length ? `<div class="suggest">
+    <div class="muted" style="font-size:13px">Returning player? Tap to link them so their all-time stats carry on:</div>
+    ${list.map(p => `<button class="small" onclick="addReturningPlayer('${p.id}')">↺ ${esc(p.name)}
+      <span class="muted">#${esc(p.number)} · ${esc(p.team.name)} · ${esc(seasonName(p.team.seasonId))}</span></button>`).join('')}
+  </div>` : '';
+}
+
+function addReturningPlayer(pid) {
+  const p = allPlayers().find(x => x.id === pid);
+  const typedNum = document.getElementById('new-num').value.trim();
+  // Same person, new roster entry for this season. If they'd claimed their player, their account comes with them.
+  editing.players.push({ id: uid(), name: p.name, number: typedNum || p.number, personId: p.personId, userId: p.userId || null, carryUser: !!p.userId });
+  renderTeams();
+  document.getElementById('new-name').focus();
 }
 
 function draftRemovePlayer(i) {
@@ -2129,7 +2433,7 @@ function deleteTeamById(id) {
 function addTeam() {
   const n = document.getElementById('tn').value.trim();
   if (!n) return;
-  const t = { id: uid(), name: n, color: document.getElementById('tc').value, players: [] };
+  const t = { id: uid(), name: n, color: document.getElementById('tc').value, players: [], seasonId: activeSeason()?.id || null };
   db.teams.push(t);
   const row = teamRow(t);
   persist(() => sb.from('teams').upsert(row));
@@ -2139,13 +2443,17 @@ function addTeam() {
 }
 
 function resetAll() {
-  if (!confirm(`Erase all teams, games and stats in ${league.name} and replace them with sample teams?`)) return;
-  const leagueId = league.id, fresh = seed();
-  db = { ...fresh, settings: db.settings }; editing = null;
-  const teams = fresh.teams.map(teamRow), players = fresh.teams.flatMap(playerRows);
+  const s = activeSeason();
+  if (!confirm(`Erase all teams, games and stats in ${s ? s.name : league.name} and replace them with sample teams? Past seasons aren’t affected.`)) return;
+  const sid = s?.id || null, fresh = seed().teams.map(t => ({ ...t, seasonId: sid }));
+  const oldGames = db.games.filter(inActiveSeason).map(g => g.id), oldTeams = db.teams.filter(inActiveSeason).map(t => t.id);
+  db.games = db.games.filter(g => !oldGames.includes(g.id));
+  db.teams = [...db.teams.filter(t => !oldTeams.includes(t.id)), ...fresh];
+  editing = null;
+  const teams = fresh.map(teamRow), players = fresh.flatMap(playerRows);
   persist(steps(
-    () => sb.from('games').delete().eq('league_id', leagueId),   // plays are removed with their games
-    () => sb.from('teams').delete().eq('league_id', leagueId),   // players are removed with their teams
+    ...(oldGames.length ? [() => sb.from('games').delete().in('id', oldGames)] : []),   // plays are removed with their games
+    ...(oldTeams.length ? [() => sb.from('teams').delete().in('id', oldTeams)] : []),   // players are removed with their teams
     () => sb.from('teams').upsert(teams),
     () => sb.from('players').upsert(players)
   ));
