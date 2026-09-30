@@ -289,6 +289,15 @@
   .actions.lineup button.tired.in { box-shadow: inset 0 0 0 2px #eda100; }
   .tired-key { display: block; font-size: 12px; margin-top: 2px; }
 
+  /* End-of-season card on the Games page */
+  .season-card { border: 2px solid var(--accent); }
+  .season-card.champion-card { border-color: #eda100; }
+  .season-card-title { font-size: 17px; font-weight: 800; margin-bottom: 4px; }
+  .season-card .row { flex-wrap: wrap; gap: 8px; }
+  .season-card .row > * { flex: 0 0 auto; }
+  .season-over { text-align: center; font-size: 13px; margin-top: 20px; }
+  .season-over a { color: var(--accent); }
+
   /* Standings */
   table.standings td:nth-child(2) { white-space: nowrap; }
   .form { display: inline-flex; gap: 3px; }
@@ -1329,6 +1338,7 @@ function renderGames() {
       </div>
     </div>` : ''}
     ${isAdmin() ? claimRequestsCard() : myStatsCard()}
+    ${seasonStatusCard()}
     ${edit && teams.length < 2 ? `<div class="card">
       <b>Add your teams first</b>
       <div class="muted">You need at least two teams to start a game. Add them on the <a href="#/teams">Teams</a> tab.</div>
@@ -1347,7 +1357,8 @@ function renderGames() {
     ${upcoming.length ? `<div class="row"><h2>Upcoming</h2>
       ${edit ? '<button class="small" onclick="clearSchedule()">Clear schedule</button>' : ''}</div>
       ${upcoming.map(gameCard).join('')}` : ''}
-    ${results.length ? `<h2>Results</h2>${results.map(gameCard).join('')}` : ''}`;
+    ${results.length ? `<h2>Results</h2>${results.map(gameCard).join('')}` : ''}
+    ${seasonOverLink()}`;
   if (document.getElementById('away')) document.getElementById('away').value = teams[1].id;
 }
 

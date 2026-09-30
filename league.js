@@ -189,6 +189,61 @@ async function resetPlayoffs() {
   renderPlayoffs();
 }
 
+// ---------- End of the season (on the Games page) ----------
+// Once the regular season is over: playoffs, then ending the season and the Hall of Fame.
+// "Over" means every scheduled regular-season game has been played. Leagues that don't use the schedule
+// creator can't be detected that way, so they get a small "Season over?" link at the bottom instead.
+function seasonStatusCard() {
+  const s = activeSeason();
+  if (!s || viewingPast()) return '';
+  const games = db.games.filter(inActiveSeason);
+  const regular = games.filter(g => (g.stage || 'regular') === 'regular');
+  const usedSchedule = regular.some(g => g.round != null);
+  const regularDone = usedSchedule && regular.length && regular.every(g => g.status === 'final');
+  const b = db.playoffsReady ? bracketOf(s) : null;
+  const admin = canEdit();
+
+  if (b?.champion) {
+    const champ = team(b.champion);
+    return `<div class="card season-card champion-card">
+      <div class="season-card-title">🏆 ${esc(champ.name)} won ${esc(s.name)}!</div>
+      <div class="row">
+        <a class="btn small" href="#/playoffs">View bracket</a>
+        ${admin ? `<a class="btn small" href="#/hof">🏆 Induct into the Hall of Fame</a>
+          <button class="small primary" onclick="openNewSeason()">🏁 End season & start the next one</button>` : ''}
+      </div></div>`;
+  }
+  if (b) {
+    const left = b.matches.filter(m => !m.bye && !m.winner).length;
+    return `<div class="card season-card">
+      <div class="season-card-title">🏆 Playoffs are on</div>
+      <div class="muted">${left} game${left === 1 ? '' : 's'} left in the bracket.</div>
+      <div class="row" style="margin-top:8px"><a class="btn small primary" href="#/playoffs">View bracket</a></div></div>`;
+  }
+  if (!regularDone || !admin) return '';
+  return `<div class="card season-card">
+    <div class="season-card-title">🎉 The regular season is complete!</div>
+    <div class="muted">All ${regular.length} regular-season games have been played. What’s next?</div>
+    <div class="row" style="margin-top:8px">
+      ${db.playoffsReady ? '<a class="btn small primary" href="#/playoffs">🏆 Set up playoffs</a>' : ''}
+      <button class="small" onclick="openNewSeason()">🏁 End season</button>
+      ${db.seasonsReady ? '<a class="btn small" href="#/hof">🏆 Hall of Fame</a>' : ''}
+    </div></div>`;
+}
+
+// For leagues without a schedule: a quiet way to reach the same things.
+function seasonOverLink() {
+  const s = activeSeason();
+  if (!s || !canEdit() || viewingPast()) return '';
+  const regular = db.games.filter(g => inActiveSeason(g) && (g.stage || 'regular') === 'regular');
+  if (regular.some(g => g.round != null) || !regular.some(g => g.status === 'final')) return '';   // the card above handles scheduled seasons
+  if (db.playoffsReady && bracketOf(s)) return '';
+  return `<p class="muted season-over">Season over?
+    ${db.playoffsReady ? '<a href="#/playoffs">Set up playoffs</a> ·' : ''}
+    <a href="#/games" onclick="openNewSeason(); return false">End ${esc(s.name)}</a> ·
+    <a href="#/hof">Hall of Fame</a></p>`;
+}
+
 // ---------- Notifications (in the app) ----------
 // Kept on this device per account. While the app is open (or installed and in the background), they can
 // also show as phone notifications once allowed.
