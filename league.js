@@ -38,7 +38,8 @@ function renderStandings() {
   const hasPlayoffs = !!s?.playoffs;
   app.innerHTML = `
     <div class="row"><h1>Standings</h1>
-      ${db.playoffsReady && (hasPlayoffs || canEdit()) ? `<a class="btn small" href="#/playoffs">🏆 Playoffs</a>` : ''}</div>
+      ${db.playoffsReady && (hasPlayoffs || canEdit()) ? `<a class="btn small" href="#/playoffs">🏆 Playoffs</a>` : ''}
+      <button class="small" onclick="exportStandings()" title="Download as a spreadsheet">⬇ CSV</button></div>
     ${seasonPicker('pickSeason')}
     <p class="muted">Regular-season games. Ranked by win % (ties count as half a win), then head-to-head, point differential and points scored.</p>
     ${table.length ? `<div class="card"><div class="table-wrap"><table class="standings">

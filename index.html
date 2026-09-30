@@ -255,6 +255,29 @@
   body.signed-out .bell { display: none; }
   @media (max-width: 380px) { header .logo span, #modeTag { display: none; } }
 
+  /* Public links, photos and bios, availability, export */
+  body.signed-out.public header a[data-nav] { display: inline; }
+  .public-banner { font-size: 14px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; justify-content: space-between; }
+  .avatar { border-radius: 50%; object-fit: cover; flex: 0 0 auto; display: inline-grid; place-items: center;
+    color: #fff; font-weight: 800; vertical-align: middle; }
+  .roster-name { color: inherit; text-decoration: none; display: inline-flex; align-items: center; gap: 8px; }
+  .profile-head { display: flex; gap: 14px; align-items: center; margin: 4px 0 10px; }
+  .bio { margin: 0 0 12px; white-space: pre-line; }
+  textarea { font: inherit; padding: 11px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--text); width: 100%; resize: vertical; }
+  .avail-line { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; margin-top: 10px;
+    padding-top: 10px; border-top: 1px solid var(--line); font-size: 13px; }
+  .avail-buttons { display: inline-flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+  .avail-buttons .muted { margin-right: 2px; }
+  button.on-yes { background: var(--good); color: #fff; border-color: transparent; }
+  button.on-maybe { background: #eda100; color: #1a1a19; border-color: transparent; }
+  button.on-no { background: var(--bad); color: #fff; border-color: transparent; }
+  .avail-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 14px; flex-wrap: wrap; }
+  .panel h4 { margin: 14px 0 4px; }
+  .actions.lineup button.out:not(.in) { opacity: .45; }
+  .export-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+  .export-buttons > span { width: 100%; font-size: 13px; }
+  .export-row { margin: 8px 0 12px; }
+
   /* Game clock, timeouts, wind, and line presets */
   .clock { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; margin-top: 2px; }
   .clock .cap-hit { color: var(--bad); font-weight: 800; }
@@ -339,6 +362,7 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="stats.js"></script>
 <script src="league.js"></script>
+<script src="extras.js"></script>
 <link rel="manifest" href="manifest.webmanifest">
 <meta name="theme-color" content="#0f1115">
 <link rel="apple-touch-icon" href="icon-180.png">
@@ -376,6 +400,9 @@ let mode = null, league = null;
 try {
   mode = localStorage.getItem('frisbee-mode');
   league = JSON.parse(localStorage.getItem('frisbee-league'));
+  // Viewing a league from a public link (this tab only).
+  const pub = JSON.parse(sessionStorage.getItem('frisbee-public'));
+  if (pub) { league = pub; mode = 'public'; }
 } catch {}
 const isAdmin = () => mode === 'admin';
 
@@ -404,13 +431,17 @@ function seed() {
 }
 
 const emptyDb = () => ({ teams: [], games: [], settings: { onField: 7 }, claims: [], claimsReady: false, passReady: false,
-  seasonsReady: false, seasons: [], hof: [] });
+  seasonsReady: false, seasons: [], hof: [], profiles: {}, avail: [] });
 let db = emptyDb();
 let dataLeagueId = null;   // which league `db` currently holds
 let loading = null, loadError = null, channel = null;
 
 function rememberLeague() {
-  try { localStorage.setItem('frisbee-league', JSON.stringify(league)); } catch {}
+  // A league opened from a public link is remembered for this tab only, so it doesn't replace your own league.
+  try {
+    if (mode === 'public') sessionStorage.setItem('frisbee-public', JSON.stringify(league));
+    else localStorage.setItem('frisbee-league', JSON.stringify(league));
+  } catch {}
 }
 
 // Supabase rows ⇄ the shapes the screens use.
@@ -461,7 +492,7 @@ async function fetchAll(table, leagueId, orders) {
 }
 
 async function fetchLeague(id) {
-  const [lg, teams, players, games, events, passProbe, seasons, hof, playoffProbe] = await Promise.all([
+  const [lg, teams, players, games, events, passProbe, seasons, hof, playoffProbe, profiles, avail] = await Promise.all([
     sb.from('leagues').select('*').eq('id', id).single()   // '*' so columns added by later updates are optional
       .then(r => { if (r.error) throw r.error; return r.data; }),
     fetchAll('teams', id, ['created_at', 'id']),
@@ -471,7 +502,9 @@ async function fetchLeague(id) {
     sb.from('games').select('first_pull').limit(1),   // fails until supabase/005 has been run
     sb.from('seasons').select('*').eq('league_id', id).order('number'),        // these two fail until supabase/006
     sb.from('hall_of_fame').select('*').eq('league_id', id).order('inducted_at'),
-    sb.from('games').select('stage').limit(1)   // fails until supabase/008 has been run
+    sb.from('games').select('stage').limit(1),   // fails until supabase/008 has been run
+    sb.from('person_profiles').select('*').eq('league_id', id),   // these two fail until supabase/010
+    sb.from('availability').select('*').eq('league_id', id)
   ]);
   const claims = await fetchClaims(id);
   const next = {
@@ -480,6 +513,12 @@ async function fetchLeague(id) {
     settings: { onField: lg.on_field, timeCap: lg.time_cap ?? null },
     createdBy: lg.created_by,
     detailsReady: 'time_cap' in lg,   // false until supabase/009_game_details.sql has been run
+    publicReady: 'is_public' in lg,   // false until supabase/010 has been run (and the next two)
+    isPublic: !!lg.is_public,
+    profilesReady: !profiles.error,
+    profiles: Object.fromEntries((profiles.data || []).map(p => [p.person_id, p])),
+    availReady: !avail.error,
+    avail: avail.data || [],
     claims: claims || [],
     claimsReady: !!claims,           // false until supabase/004_player_claims.sql has been run
     passReady: !passProbe.error,     // false until supabase/005_pass_by_pass.sql has been run
@@ -641,7 +680,7 @@ function persist(...ops) {
 
 function runOp(op) {
   if (op.upsert) return sb.from(op.upsert).upsert(op.rows);
-  if (op.del) return sb.from(op.del).delete().in(op.col || 'id', op.vals);
+  if (op.del) { const q = sb.from(op.del).delete().in(op.col || 'id', op.vals); return op.match ? q.match(op.match) : q; }
   return sb.rpc(op.rpc, op.args);
 }
 
@@ -729,6 +768,10 @@ function subscribeLeague(id) {
     on('UPDATE', 'seasons', refreshLeague);
     on('INSERT', 'hall_of_fame', p => remoteHof(p.new));
     on('DELETE', 'hall_of_fame', p => { if (db.hof.some(h => h.id === p.old.id)) refreshLeague(); }, null);
+  }
+  if (db.profilesReady) {   // only once supabase/010 has been run
+    on('*', 'person_profiles', refreshLeague);
+    on('*', 'availability', refreshLeague);
   }
   if (db.claimsReady) {   // only once the claims table exists
     on('INSERT', 'player_claims', p => remoteClaim(p.new));
@@ -876,8 +919,10 @@ function route() {
   if (!sb) return renderSetup();
   if (!authReady) { app.innerHTML = ''; return; }
   if (recovering) return renderNewPassword();
-  if (!session) return renderLogin();
   const [page, id] = location.hash.replace(/^#\/?/, '').split('/');
+  if (page === 'view' && id) return enterPublic(id);   // a public link: no account needed
+  document.body.classList.toggle('public', isPublicView());
+  if (!session && !isPublicView()) return renderLogin();
   const inLeague = !!(league && mode) && ['games', 'game', 'box', 'leaders', 'teams', 'schedule', 'settings', 'profile', 'team', 'hof', 'standings', 'playoffs'].includes(page);
   updateBell();
   document.body.classList.toggle('no-nav', !inLeague);
@@ -890,7 +935,10 @@ function route() {
       || a.dataset.nav === page));
   if (page === 'admin') return id === 'create' ? renderCreateLeague() : renderAdminHome();
   if (page === 'player') return renderPlayerHome();
-  if (!inLeague) return renderMenu();
+  if (!inLeague) {
+    if (isPublicView()) { location.hash = '#/games'; return; }   // public viewers stay in their league
+    return renderMenu();
+  }
   if (dataLeagueId !== league.id) {
     if (loadError) {
       app.innerHTML = `<h1>${esc(league.name)}</h1><p class="msg error">Couldn’t load this league: ${esc(loadError)}</p>
@@ -964,6 +1012,7 @@ async function installApp() {
 
 function enterLeague(l, m) {
   if (league?.id !== l.id) { unsubscribeLeague(); db = emptyDb(); dataLeagueId = null; loadError = null; viewSeasonId = null; }
+  try { sessionStorage.removeItem('frisbee-public'); } catch {}
   league = { id: l.id, name: l.name, border_colors: l.border_colors || null }; mode = m; editing = null;
   rememberLeague();
   try { localStorage.setItem('frisbee-mode', m); } catch {}
@@ -1189,9 +1238,9 @@ function gameCard(g) {
       <div class="muted">${g.stage === 'playoff' ? `🏆 Playoffs · ${roundName(g.round, Math.log2(db.seasons.find(s => s.id === g.seasonId)?.playoffs?.size || 2))}${upcoming ? '' : ' · '}` : ''}${upcoming
         ? (g.stage === 'playoff' ? '' : `${fmtWhen(g.when)} · Field ${g.field} · Round ${g.round}`) : new Date(g.created).toLocaleDateString()}</div>
     </div>`;
-  if (upcoming) return `<div class="card game-link">${info}${canEdit()
+  if (upcoming) return `<div class="card"><div class="game-link">${info}${canEdit()
     ? `<button class="small primary" onclick="startScheduled('${g.id}')">Start</button>`
-    : '<span class="badge scheduled">UPCOMING</span>'}</div>`;
+    : '<span class="badge scheduled">UPCOMING</span>'}</div>${availabilityLine(g)}</div>`;
   return `<a class="card game-link" href="#/${g.status === 'live' && isAdmin() ? 'game' : 'box'}/${g.id}">
     ${info}<span class="badge ${g.status}">${STATUS[g.status]}</span></a>`;
 }
@@ -1208,10 +1257,11 @@ function renderGames() {
       <div class="row">
         <h1 style="margin:0">${esc(league.name)}</h1>
         ${isAdmin() ? '<a class="btn small" href="#/settings">⚙️ Settings</a>' : ''}
-        <a class="btn small" href="#/${isAdmin() ? 'admin' : 'player'}">Switch league</a>
+        ${isPublicView() ? '' : `<a class="btn small" href="#/${isAdmin() ? 'admin' : 'player'}">Switch league</a>`}
       </div>
       ${s ? `<div class="muted" style="margin-top:4px">${esc(s.name)}${s.status === 'archived' ? ' · finished' : ''}</div>` : ''}
     </div>
+    ${publicBanner()}
     ${seasonPicker('pickSeason')}
     ${viewingPast() ? `<div class="card past-season">📚 You’re looking at <b>${esc(s.name)}</b>, a finished season. Its stats are saved and can’t be changed.
       <a href="#/games" onclick="pickSeason('${activeSeason()?.id}'); return false">Back to the current season →</a></div>` : ''}
@@ -1287,7 +1337,7 @@ async function decideClaim(id, approve, btn) {
 
 // Player side: a short "your stats" card, or a nudge to claim a player.
 function myStatsCard() {
-  if (!db.claimsReady) return '';
+  if (!db.claimsReady || isPublicView()) return '';
   const mine = myPlayer(), pending = myPendingClaim();
   if (mine) {
     const s = statsOf(analyze(db.games.filter(g => g.seasonId === mine.team.seasonId || !db.seasonsReady)), mine.id);
@@ -1340,11 +1390,11 @@ function renderRosters() {
   // Claims belong to a season, so only this season's rosters can be claimed.
   const teams = seasonTeams(), pending = myPendingClaim();
   const mine = allPlayers().find(p => p.userId && p.userId === me() && inViewSeason(p.team));
-  const canClaim = db.claimsReady && !viewingPast() && !mine && !pending;
+  const canClaim = db.claimsReady && session && !isPublicView() && !viewingPast() && !mine && !pending;
   app.innerHTML = `
     <h1>Teams</h1>
     ${seasonPicker('pickSeason')}
-    ${!db.claimsReady || viewingPast() ? '' : mine
+    ${!db.claimsReady || viewingPast() || isPublicView() ? '' : mine
       ? `<div class="card"><b>You’re #${esc(mine.number)} ${esc(mine.name)} on ${esc(mine.team.name)}.</b>
           <div class="muted"><a href="#/profile/${mine.id}">View your stats →</a></div></div>`
       : pending ? `<div class="card"><b>Claim pending</b><div class="muted">Waiting for an admin to approve you as
@@ -1355,7 +1405,7 @@ function renderRosters() {
       <div class="card">
         <h2 style="margin-top:0"><a href="#/team/${t.id}" style="color:inherit"><span class="dot" style="background:${esc(t.color)}"></span>${esc(t.name)}</a></h2>
         ${t.players.length ? `<ul class="roster">${t.players.map(p => `
-          <li><a href="#/profile/${p.id}" style="color:inherit;text-decoration:none"><span class="muted">#${esc(p.number)}</span> ${esc(p.name)}</a>
+          <li><a href="#/profile/${p.id}" class="roster-name">${avatar({ ...p, team: t }, 28)}<span class="muted">#${esc(p.number)}</span> ${esc(p.name)}</a>
             <span class="row" style="flex:0 0 auto">${
               p.userId && p.userId === me() ? `<span class="badge you">YOU</span><button class="small" onclick="releasePlayer('${p.id}')">Unclaim</button>`
               : p.userId ? '<span class="badge">CLAIMED</span>'
@@ -1406,9 +1456,18 @@ function renderProfile(pid) {
         { k: 'gp', h: 'GP' }, { k: 'pp', h: 'PP' }, { k: 'g', h: 'G' }, { k: 'a', h: 'A' }, { k: 'd', h: 'D' }, { k: 'pm', h: '+/-' }])}</div>`;
   })() : '';
 
+  const prof = profileOf(p.personId);
   app.innerHTML = `
-    <div class="row"><h1>#${esc(p.number)} ${esc(p.name)}</h1>
-      ${p.userId === me() ? '<span class="badge you" style="flex:0 0 auto">YOU</span>' : ''}</div>
+    <div class="profile-head">
+      ${avatar({ ...p, team: t }, 72)}
+      <div style="flex:1;min-width:0">
+        <div class="row"><h1 style="margin:0">#${esc(p.number)} ${esc(p.name)}</h1>
+          ${p.userId && p.userId === me() ? '<span class="badge you" style="flex:0 0 auto">YOU</span>' : ''}</div>
+        ${prof?.position ? `<div class="muted">${esc(prof.position)}</div>` : ''}
+      </div>
+    </div>
+    ${prof?.bio ? `<p class="bio">${esc(prof.bio)}</p>` : ''}
+    ${canEditPerson(p) ? `<button class="small" style="margin-bottom:12px" onclick="editProfile('${p.id}')">✏️ Edit profile${prof ? '' : ' (add a photo and bio)'}</button>` : ''}
     ${hof ? `<a class="card hof-banner" href="#/hof">🏆 Hall of Fame${hof.note ? ` · “${esc(hof.note)}”` : ''}</a>` : ''}
     <p class="muted"><a href="#/team/${t.id}" style="color:inherit"><span class="dot" style="background:${esc(t.color)}"></span>${esc(t.name)}</a>
       ${db.seasonsReady ? `· ${esc(seasonName(t.seasonId))}` : ''} · ${played.length} game${played.length === 1 ? '' : 's'}</p>
@@ -1474,6 +1533,18 @@ function renderSettings() {
       </div>
       <a class="card game-link" href="#/hof"><span><b>🏆 Hall of Fame</b><br><span class="muted">${db.hof.length} inducted · induct players at the end of each season</span></span><span class="muted">→</span></a>`;
     })() : ''}
+
+    ${publicLinkCard()}
+
+    <h2>Export</h2>
+    <div class="card export-buttons">
+      <span class="muted">Spreadsheet (CSV) files that open in Excel, Google Sheets or Numbers.</span>
+      <button class="small" onclick="exportGames(true)">⬇ All games, every season</button>
+      <button class="small" onclick="exportGames(false)">⬇ This season’s games</button>
+      <button class="small" onclick="exportStandings()">⬇ Standings</button>
+      <button class="small" onclick="leaderScope = 'season'; exportPlayerStats()">⬇ Player stats, this season</button>
+      ${db.seasonsReady ? '<button class="small" onclick="leaderScope = \'all\'; exportPlayerStats(); leaderScope = \'season\'">⬇ Player stats, all time</button>' : ''}
+    </div>
 
     <h2>Admins</h2>
     <div class="card" id="admin-list"><span class="muted">Loading…</span></div>
@@ -2025,6 +2096,10 @@ let lineupDraft = null, lineupTeam = null;
 function openLineup() {
   const g = game(ui.gameId);
   lineupDraft = { [g.homeId]: [...(g.lineup?.[g.homeId] || [])], [g.awayId]: [...(g.lineup?.[g.awayId] || [])] };
+  // No lineup yet? Start with the players who said they're coming (up to the on-field limit).
+  if (db.availReady && !g.events.length) for (const tid of [g.homeId, g.awayId]) {
+    if (!lineupDraft[tid].length) lineupDraft[tid] = team(tid).players.filter(p => availOf(g.id, p.id) === 'yes').map(p => p.id).slice(0, onFieldMax());
+  }
   // Open on the team currently shown, or the home team (ui.teamId can be left over from another game).
   lineupTeam = ui.teamId === g.awayId ? g.awayId : g.homeId;
   renderLineup();
@@ -2072,9 +2147,10 @@ function renderLineup(msg = '') {
       ${Object.values(hist.streak).some(n => n >= 3) ? '<span class="tired-key">🔥 = played 3+ points in a row</span>' : ''}</div>
     <div class="msg error">${esc(msg)}</div>
     <div class="actions lineup">${t.players.map(p => {
-      const n = hist.streak[p.id] || 0;
-      return `<button class="${sel.includes(p.id) ? 'in' : ''} ${n >= 3 ? 'tired' : ''}" onclick="toggleLineup('${p.id}')">
+      const n = hist.streak[p.id] || 0, av = db.availReady ? availOf(g.id, p.id) : null;
+      return `<button class="${sel.includes(p.id) ? 'in' : ''} ${n >= 3 ? 'tired' : ''} ${av === 'no' ? 'out' : ''}" onclick="toggleLineup('${p.id}')">
         ${sel.includes(p.id) ? '✓ ' : ''}#${esc(p.number)} ${esc(p.name)}
+        ${av ? `<span class="streak">${av === 'yes' ? 'Said they’re in' : av === 'maybe' ? 'Maybe coming' : 'Said they’re out'}</span>` : ''}
         ${n >= 2 ? `<span class="streak">${n >= 3 ? '🔥' : ''}${n} in a row</span>` : ''}</button>`;
     }).join('')}
     </div>
@@ -2429,6 +2505,10 @@ function renderBox(g) {
       <button class="${boxTab === 'points' ? 'on' : ''}" onclick="boxTab = 'points'; route()">Points</button>
     </div>
     ${boxTab === 'points' ? pointsTab : statsTab}
+    <div class="row export-row">
+      <button class="small" onclick="exportBoxScore('${g.id}')">⬇ Box score CSV</button>
+      <button class="small" onclick="exportPlays('${g.id}')">⬇ Play-by-play CSV</button>
+    </div>
     ${isAdmin() && (!db.seasonsReady || inActiveSeason(g)) ? `<div class="row">
       ${g.status === 'live'
         ? `<a class="btn primary" href="#/game/${g.id}">Back to tracking</a>`
@@ -2469,7 +2549,8 @@ function renderLeaders() {
   const ts = t && an.teams[t.id];
   const db_teams = teams;
   app.innerHTML = `
-    <div class="row"><h1>Leaders</h1>${db.seasonsReady ? '<a class="btn small" href="#/hof">🏆 Hall of Fame</a>' : ''}</div>
+    <div class="row"><h1>Leaders</h1>${db.seasonsReady ? '<a class="btn small" href="#/hof">🏆 Hall of Fame</a>' : ''}
+      <button class="small" onclick="exportPlayerStats()" title="Download as a spreadsheet">⬇ CSV</button></div>
     ${seasonPicker('pickLeaderSeason', [['all', 'All time', false]])}
     <div class="tabs leader-tabs">
       <button class="${t ? '' : 'on'}" onclick="leaderView = 'all'; renderLeaders()">All</button>
@@ -2505,7 +2586,8 @@ function renderAllTimeLeaders() {
   const nameCol = { k: 'name', h: 'Player', l: true, f: r => `<a href="#/profile/${r.id}" style="color:inherit">${r.inHof ? '🏆 ' : ''}${esc(r.name)}</a>
     <div class="muted" style="font-size:12px">${r.seasons} season${r.seasons === 1 ? '' : 's'}</div>` };
   app.innerHTML = `
-    <div class="row"><h1>Leaders</h1><a class="btn small" href="#/hof">🏆 Hall of Fame</a></div>
+    <div class="row"><h1>Leaders</h1><a class="btn small" href="#/hof">🏆 Hall of Fame</a>
+      <button class="small" onclick="exportPlayerStats()" title="Download as a spreadsheet">⬇ CSV</button></div>
     ${seasonPicker('pickLeaderSeason', [['all', 'All time', true]])}
     <p class="muted">All-time stats across ${db.seasons.length} season${db.seasons.length === 1 ? '' : 's'}. Players linked across seasons are added up as one person.</p>
     ${statCatTabs('renderLeaders()')}
@@ -2522,7 +2604,7 @@ function renderHallOfFame() {
   const card = h => {
     const s = people[h.person_id] || finishPlayer(ZERO()), entries = personEntries(h.person_id), latest = entries.at(-1);
     return `<div class="card hof-card">
-      <div class="row"><span class="hof-trophy">🏆</span>
+      <div class="row"><span class="hof-trophy">${latest ? avatar(latest, 48) : '🏆'}</span>
         <span style="flex:1"><b>${latest ? `<a href="#/profile/${latest.id}" style="color:inherit">${esc(h.name)}</a>` : esc(h.name)}</b>
           <div class="muted" style="font-size:13px">Inducted${h.season_id ? ` after ${esc(seasonName(h.season_id))}` : ''} ·
             ${entries.length} season${entries.length === 1 ? '' : 's'}${latest ? ` · ${esc(latest.team.name)}` : ''}</div></span>
@@ -2652,7 +2734,7 @@ function teamCard(t, edit = true) {
         <button class="small danger" onclick="deleteTeamById('${t.id}')">Delete</button>` : ''}
       </div>
       ${t.players.length ? `<ul class="roster">${t.players.map(p => `
-        <li><a href="#/profile/${p.id}" style="color:inherit;text-decoration:none"><span class="muted">#${esc(p.number)}</span> ${esc(p.name)}</a>
+        <li><a href="#/profile/${p.id}" class="roster-name">${avatar({ ...p, team: t }, 28)}<span class="muted">#${esc(p.number)}</span> ${esc(p.name)}</a>
           ${p.userId ? `<span class="row" style="flex:0 0 auto">
             <span class="muted claimed" title="Claimed">✓ ${esc(claimedBy(p.id) || 'Claimed')}</span>
             <button class="small" onclick="releasePlayer('${p.id}')">Unlink</button></span>` : ''}</li>`).join('')}
