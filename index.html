@@ -255,6 +255,17 @@
   body.signed-out .bell { display: none; }
   @media (max-width: 380px) { header .logo span, #modeTag { display: none; } }
 
+  /* Game clock, timeouts, wind, and line presets */
+  .clock { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; margin-top: 2px; }
+  .clock .cap-hit { color: var(--bad); font-weight: 800; }
+  .game-extras { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; font-size: 13px; margin: -4px 2px 10px; }
+  .line-presets { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
+  .actions.lineup button { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+  .streak { font-size: 11px; font-weight: 600; opacity: .8; }
+  .actions.lineup button.tired:not(.in) { border-color: #eda100; }
+  .actions.lineup button.tired.in { box-shadow: inset 0 0 0 2px #eda100; }
+  .tired-key { display: block; font-size: 12px; margin-top: 2px; }
+
   /* Standings */
   table.standings td:nth-child(2) { white-space: nowrap; }
   .form { display: inline-flex; gap: 3px; }
@@ -407,7 +418,7 @@ const toGame = r => ({
   id: r.id, homeId: r.home_id, awayId: r.away_id, status: r.status, created: Number(r.created_ms),
   when: r.scheduled_at, field: r.field, round: r.round, lineup: r.lineup, pointPlayers: r.point_players,
   firstPull: r.first_pull || null, seasonId: r.season_id || null,
-  stage: r.stage || 'regular', bracketSlot: r.bracket_slot || null, events: []
+  stage: r.stage || 'regular', bracketSlot: r.bracket_slot || null, wind: r.wind || null, events: []
 });
 const toEvent = r => ({
   id: r.id, t: Number(r.t), type: r.type, teamId: r.team_id, playerId: r.player_id,
@@ -428,6 +439,7 @@ const gameRow = g => ({
   scheduled_at: g.when || null, field: g.field ?? null, round: g.round ?? null,
   lineup: g.lineup || null, point_players: g.pointPlayers || null, ...seasonCols(g),
   ...(db.playoffsReady ? { stage: g.stage || 'regular', bracket_slot: g.bracketSlot || null } : {}),   // columns added by 008
+  ...(db.detailsReady ? { wind: g.wind || null } : {}),                                                // column added by 009
   ...(db.passReady ? { first_pull: g.firstPull || null } : {})   // column added by supabase/005
 });
 const eventRow = (g, e) => ({
@@ -450,7 +462,7 @@ async function fetchAll(table, leagueId, orders) {
 
 async function fetchLeague(id) {
   const [lg, teams, players, games, events, passProbe, seasons, hof, playoffProbe] = await Promise.all([
-    sb.from('leagues').select('name, border_colors, on_field, created_by').eq('id', id).single()
+    sb.from('leagues').select('*').eq('id', id).single()   // '*' so columns added by later updates are optional
       .then(r => { if (r.error) throw r.error; return r.data; }),
     fetchAll('teams', id, ['created_at', 'id']),
     fetchAll('players', id, ['sort', 'id']),
@@ -465,8 +477,9 @@ async function fetchLeague(id) {
   const next = {
     teams: teams.map(t => ({ id: t.id, name: t.name, color: t.color, seasonId: t.season_id, players: [] })),
     games: games.map(toGame),
-    settings: { onField: lg.on_field },
+    settings: { onField: lg.on_field, timeCap: lg.time_cap ?? null },
     createdBy: lg.created_by,
+    detailsReady: 'time_cap' in lg,   // false until supabase/009_game_details.sql has been run
     claims: claims || [],
     claimsReady: !!claims,           // false until supabase/004_player_claims.sql has been run
     passReady: !passProbe.error,     // false until supabase/005_pass_by_pass.sql has been run
@@ -576,11 +589,12 @@ function refreshLeague() {
   refreshTimer = setTimeout(async () => {
     if (!league || dataLeagueId !== league.id) return;
     if (writes.length) { missedRemote = true; return; } // try again once our own changes are saved
-    const id = league.id;
+    const id = league.id, seq = writeSeq;
     try {
       const next = await fetchLeague(id);
       if (league?.id !== id) return;
-      if (writes.length) { missedRemote = true; return; }
+      // A change made while this was loading may be missing from it: don't show stale data, load again.
+      if (writes.length || writeSeq !== seq) { missedRemote = true; if (!writes.length) refreshLeague(); return; }
       db = next; offlineData = null; updateSyncBadge();
       saveSnapshot(id, next);
       rerender();
@@ -615,9 +629,11 @@ function restoreQueue() {
 }
 
 // Queue one or more changes (applied in order). Falsy entries are skipped, for optional steps.
+let writeSeq = 0;   // counts local changes, so a refresh can tell whether one happened while it loaded
 function persist(...ops) {
   ops = ops.filter(Boolean);
   if (!ops.length) return;
+  writeSeq++;
   writes.push({ ops, done: 0, leagueId: league.id });
   saveQueue();
   flush();
@@ -838,7 +854,7 @@ const score = (g, tid) => g.events.filter(e => e.teamId === tid && (e.type === '
 
 const LABEL = {
   goal: 'Goal', d: 'D', throwaway: 'Throwaway', drop: 'Drop', callahan: 'Callahan', half: 'Halftime',
-  pull: 'Pull', pickup: 'Pickup', pass: 'Pass', stall: 'Stall'
+  pull: 'Pull', pickup: 'Pickup', pass: 'Pass', stall: 'Stall', timeout: 'Timeout'
 };
 
 // Halftime is stored as a 'half' event in the play-by-play (no player attached).
@@ -886,7 +902,7 @@ function route() {
     return;
   }
   if (page === 'game' && game(id)) return isAdmin() ? renderTracker(game(id)) : renderBox(game(id));
-  if (page === 'box' && game(id)) return renderBox(game(id));
+  if (page === 'box' && game(id)) { renderBox(game(id)); return tickClocks(); }
   if (page === 'leaders') return renderLeaders();
   if (page === 'teams') return isAdmin() ? renderTeams() : renderRosters();
   if (page === 'profile') return renderProfile(id);
@@ -1432,6 +1448,14 @@ function renderSettings() {
       </div>
     </div>
 
+    ${db.detailsReady ? `<h2>Game time cap</h2>
+    <div class="card">
+      <div class="muted">Optional. The game clock counts down to it during games, starting from the first pull.</div>
+      <select style="margin-top:10px" onchange="setTimeCap(this.value)">
+        ${[null, 45, 60, 75, 90, 100, 120].map(m => `<option value="${m ?? ''}" ${(db.settings.timeCap ?? null) === m ? 'selected' : ''}>${m ? `${m} minutes` : 'No time cap'}</option>`).join('')}
+      </select>
+    </div>` : ''}
+
     <h2>League border</h2>
     <div class="card row" style="${borderStyle(league.border_colors)}">
       <b>${esc(league.name)}</b>
@@ -1566,6 +1590,13 @@ function setOnField(delta) {
   const leagueId = league.id;
   persist({ rpc: 'set_league_on_field', args: { p_league_id: leagueId, p_on_field: n } });
   renderSettings();
+}
+
+function setTimeCap(v) {
+  const m = v ? +v : null;
+  db.settings = { ...db.settings, timeCap: m };
+  persist({ rpc: 'set_league_time_cap', args: { p_league_id: league.id, p_minutes: m } });
+  toast(m ? `Time cap set to ${m} minutes.` : 'No time cap.');
 }
 
 function startScheduled(id) {
@@ -1767,6 +1798,7 @@ function playLog(g, limit, emptyText) {
       case 'pass': return `${who(e.playerId)} <span class="muted">→</span> ${who(e.targetId)}`;
       case 'pull': return `${who(e.playerId)}${e.detail?.ob ? ' <span class="muted">(out of bounds)</span>' : ''}`;
       case 'goal': case 'drop': return `${who(e.playerId)}${e.assistId ? ` <span class="muted">from ${who(e.assistId)}</span>` : ''}`;
+      case 'timeout': return esc(team(e.teamId)?.name || '');
       default: return who(e.playerId);
     }
   };
@@ -1893,9 +1925,13 @@ function renderTracker(g) {
       <div>
         <div class="nums">${score(g, h.id)}–${score(g, a.id)}</div>
         <div class="muted">${half ? `2nd half · HT ${half[0]}–${half[1]}` : '1st half'}</div>
+        ${gameClockHtml(g, st)}
       </div>
       <div class="team" style="color:${a.color}">${esc(a.name)}</div>
     </div>
+    ${db.detailsReady ? `<div class="game-extras muted">
+      <span>Timeouts this half: ${[h, a].map(t => `${esc(t.name)} <b>${timeoutsThisHalf(g, t.id)}</b>`).join(' · ')}</span>
+      <span>${g.wind ? windText(g.wind) : ''}</span></div>` : ''}
     ${panel}
     <h2>Recent plays</h2>
     <div class="card">${playLog(g, 6, 'Plays will show up here.')}</div>
@@ -1904,7 +1940,82 @@ function renderTracker(g) {
       <a class="btn" href="#/box/${g.id}">Box score</a>
       ${!half && st.phase === 'pull' && st.point > 1 ? '<button onclick="halftime()">Halftime</button>' : ''}
       <button class="primary" onclick="endGame()">End game</button>
-    </div>`;
+    </div>
+    ${db.detailsReady ? `<div class="row" style="margin-top:10px">
+      <button onclick="timeoutSheet()">⏸ Timeout</button>
+      <button onclick="windSheet()">🌬 Wind</button>
+    </div>` : ''}`;
+  tickClocks();
+}
+
+// ----- Game clock, time cap, timeouts and wind -----
+// The game clock runs from the first pull; the point clock from the current point's pull.
+function gameClockHtml(g, st) {
+  const firstPull = g.events.find(e => e.type === 'pull');
+  if (!firstPull || g.status !== 'live') return '';
+  const lastPull = [...g.events].reverse().find(e => e.type === 'pull' || e.type === 'goal' || e.type === 'callahan');
+  const inPoint = lastPull?.type === 'pull' && st.phase !== 'pull';
+  const cap = db.settings.timeCap;
+  return `<div class="clock">⏱ <span data-clock-since="${firstPull.t}"></span>
+    ${inPoint ? `· point <span data-clock-since="${lastPull.t}"></span>` : ''}
+    ${cap ? `<div data-cap-at="${firstPull.t + cap * 60000}"></div>` : ''}</div>`;
+}
+const mmss = ms => { const s = Math.max(0, Math.floor(ms / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
+function tickClocks() {
+  for (const el of document.querySelectorAll('[data-clock-since]')) el.textContent = mmss(Date.now() - +el.dataset.clockSince);
+  for (const el of document.querySelectorAll('[data-cap-at]')) {
+    const left = +el.dataset.capAt - Date.now();
+    el.textContent = left > 0 ? `Cap in ${mmss(left)}` : 'Time cap reached';
+    el.classList.toggle('cap-hit', left <= 0);
+  }
+}
+setInterval(tickClocks, 1000);
+
+function timeoutsThisHalf(g, tid) {
+  const halfAt = g.events.findIndex(e => e.type === 'half');
+  const events = halfAt < 0 ? g.events : g.events.slice(halfAt);
+  return events.filter(e => e.type === 'timeout' && e.teamId === tid).length;
+}
+
+function timeoutSheet() {
+  const g = game(ui.gameId);
+  openSheet(`
+    <h3>Timeout. Which team called it?</h3>
+    <div class="actions">
+      ${[g.homeId, g.awayId].map(tid => `<button onclick="recordTimeout('${tid}')"><span class="dot" style="background:${team(tid).color}"></span>${esc(team(tid).name)}
+        <span class="muted">(${timeoutsThisHalf(g, tid)} used)</span></button>`).join('')}
+      <button class="full" onclick="closeSheet()">Cancel</button>
+    </div>`);
+}
+function recordTimeout(tid) { play('timeout', { teamId: tid }); route(); }
+
+const WIND_DIRS = { left: '← toward the left end zone', right: 'toward the right end zone →', cross: '↕ across the field' };
+const WIND_SHORT = { left: 'toward the left end zone', right: 'toward the right end zone', cross: 'across the field' };
+const windText = w => (w?.mph ? `🌬 ${w.mph} mph${w.dir ? ` ${WIND_SHORT[w.dir]}` : ''}` : '');
+let windDraft = null;
+function windSheet() {
+  const g = game(ui.gameId);
+  windDraft = windDraft?.gameId === g.id ? windDraft : { gameId: g.id, mph: g.wind?.mph ?? 5, dir: g.wind?.dir || null };
+  openSheet(`
+    <h3>🌬 Wind</h3>
+    <p class="muted" style="margin-top:0">Directions are as seen from where you’re standing on the sideline.</p>
+    <div class="stepper" style="justify-content:center">
+      <button onclick="windDraft.mph = Math.max(0, windDraft.mph - 1); windSheet()">−</button>
+      <b>${windDraft.mph}</b><span class="muted">mph</span>
+      <button onclick="windDraft.mph = Math.min(60, windDraft.mph + 1); windSheet()">+</button>
+    </div>
+    <div class="actions" style="margin-top:12px">
+      ${Object.entries(WIND_DIRS).map(([k, label]) => `<button class="${windDraft.dir === k ? 'in' : ''} ${k === 'cross' ? 'full' : ''}"
+        onclick="windDraft.dir = '${k}'; windSheet()">${label}</button>`).join('')}
+      <button onclick="saveWind(null)">No wind</button>
+      <button class="goal" onclick="saveWind(windDraft)">Save</button>
+      <button class="full" onclick="closeSheet()">Cancel</button>
+    </div>`);
+}
+function saveWind(w) {
+  const g = game(ui.gameId);
+  g.wind = w && w.mph > 0 ? { mph: w.mph, dir: w.dir } : null;
+  windDraft = null; saveGame(g); route();
 }
 
 // ---------- Lineup ----------
@@ -1919,8 +2030,32 @@ function openLineup() {
   renderLineup();
 }
 
+// Lines this team used earlier in the game, and how many points in a row each player has played.
+function lineHistory(g, tid) {
+  const pts = analyzeGame(g).points.filter(p => p.played?.[tid]);
+  const lastOf = f => [...pts].reverse().find(f)?.played[tid] || null;
+  const streak = {};
+  for (const p of team(tid).players) {
+    let n = 0;
+    for (let i = pts.length - 1; i >= 0 && pts[i].played[tid].includes(p.id); i--) n++;
+    streak[p.id] = n;
+  }
+  return { last: pts.at(-1)?.played[tid] || null, o: lastOf(p => p.receiving === tid), d: lastOf(p => p.pulling === tid), streak };
+}
+
+function useLine(which) {
+  const g = game(ui.gameId), hist = lineHistory(g, lineupTeam), ids = hist[which] || [];
+  const roster = new Set(team(lineupTeam).players.map(p => p.id));
+  lineupDraft[lineupTeam] = ids.filter(id => roster.has(id)).slice(0, onFieldMax());
+  renderLineup();
+}
+
 function renderLineup(msg = '') {
   const g = game(ui.gameId), max = onFieldMax(), sel = lineupDraft[lineupTeam], t = team(lineupTeam);
+  const hist = lineHistory(g, lineupTeam), st = gameState(g);
+  // Between points we know who's on offense next.
+  const nextRole = st.phase === 'pull' ? (st.receiving === lineupTeam ? 'offense' : 'defense') : null;
+  const preset = (key, label) => `<button class="small ${nextRole && key === nextRole[0] ? 'primary' : ''}" ${hist[key] ? `onclick="useLine('${key}')"` : 'disabled'}>${label}</button>`;
   openSheet(`
     <h3>Lineup</h3>
     <div class="tabs">${[g.homeId, g.awayId].map(tid => {
@@ -1928,12 +2063,20 @@ function renderLineup(msg = '') {
       return `<button class="${on ? 'on' : ''}" style="border-color:${x.color};${on ? 'background:' + x.color : ''}"
         onclick="lineupTeam = '${tid}'; renderLineup()">${esc(x.name)} (${lineupDraft[tid].length})</button>`;
     }).join('')}</div>
+    ${nextRole ? `<div class="muted">${esc(t.name)} ${nextRole === 'offense' ? 'receive the pull (offense)' : 'pull (defense)'} next point.</div>` : ''}
+    <div class="line-presets">
+      ${preset('last', '↺ Last point')}${preset('o', 'Last O-line')}${preset('d', 'Last D-line')}
+    </div>
     <div class="muted">Tap players to put them in or take them out.
-      <b style="color:var(--text)">${sel.length} / ${max}</b> on the field.</div>
+      <b style="color:var(--text)">${sel.length} / ${max}</b> on the field.
+      ${Object.values(hist.streak).some(n => n >= 3) ? '<span class="tired-key">🔥 = played 3+ points in a row</span>' : ''}</div>
     <div class="msg error">${esc(msg)}</div>
-    <div class="actions lineup">${t.players.map(p => `
-      <button class="${sel.includes(p.id) ? 'in' : ''}" onclick="toggleLineup('${p.id}')">
-        ${sel.includes(p.id) ? '✓ ' : ''}#${esc(p.number)} ${esc(p.name)}</button>`).join('')}
+    <div class="actions lineup">${t.players.map(p => {
+      const n = hist.streak[p.id] || 0;
+      return `<button class="${sel.includes(p.id) ? 'in' : ''} ${n >= 3 ? 'tired' : ''}" onclick="toggleLineup('${p.id}')">
+        ${sel.includes(p.id) ? '✓ ' : ''}#${esc(p.number)} ${esc(p.name)}
+        ${n >= 2 ? `<span class="streak">${n >= 3 ? '🔥' : ''}${n} in a row</span>` : ''}</button>`;
+    }).join('')}
     </div>
     <div class="actions" style="margin-top:12px">
       <button onclick="lineupDraft[lineupTeam] = []; renderLineup()">Clear ${esc(t.name)}</button>
@@ -1959,7 +2102,8 @@ function saveLineup() {
     }
   }
   // An empty lineup means "not set", so the whole roster is shown again.
-  const midPoint = eventsThisPoint(g).some(e => e.type !== 'half');
+  // Mid-point once the pull is in the air (a timeout or halftime between points doesn't count).
+  const midPoint = eventsThisPoint(g).some(e => e.type !== 'half' && e.type !== 'timeout');
   g.lineup = {};
   g.pointPlayers = g.pointPlayers || {};
   for (const tid of [g.homeId, g.awayId]) {
@@ -2141,6 +2285,7 @@ function describePlay(e) {
     case 'goal': return `Goal ${n(e.playerId)}${e.assistId ? ` from ${n(e.assistId)}` : ''}`;
     case 'drop': return `Drop by ${n(e.playerId)}`;
     case 'half': return 'Halftime';
+    case 'timeout': return `Timeout by ${team(e.teamId)?.name || 'a team'}`;
     default: return `${LABEL[e.type]} ${n(e.playerId)}`;
   }
 }
@@ -2265,16 +2410,20 @@ function renderBox(g) {
         <div class="muted"><span class="live-dot"></span><b style="color:var(--bad)">LIVE</b></div>
         <div class="nums">${score(g, h.id)}–${score(g, a.id)}</div>
         <div class="muted">${half ? `2nd half · HT ${half[0]}–${half[1]}` : '1st half'}</div>
+        ${gameClockHtml(g, gameState(g))}
       </div>
       <div class="team" style="color:${a.color}">${esc(a.name)}</div>
     </div>
-    <p class="muted" style="text-align:center;margin-top:-4px">Updates automatically as plays are recorded.</p>
+    <p class="muted" style="text-align:center;margin-top:-4px">Updates automatically as plays are recorded.${g.wind ? ` ${windText(g.wind)}.` : ''}</p>
     <h2>Recent plays</h2><div class="card">${playLog(g, 8, 'No plays yet.')}</div>` : `
     <div class="row" style="justify-content:space-between">
       <h1 style="flex:1">${esc(h.name)} ${score(g, h.id)} – ${score(g, a.id)} ${esc(a.name)}</h1>
       <span class="badge ${g.status}" style="flex:0 0 auto">${STATUS[g.status]}</span>
     </div>
-    <div class="muted">${new Date(g.created).toLocaleString()}${half ? ` · Halftime ${half[0]}–${half[1]}` : ''}</div>`}
+    <div class="muted">${new Date(g.created).toLocaleString()}${half ? ` · Halftime ${half[0]}–${half[1]}` : ''}${g.wind ? ` · ${windText(g.wind)}` : ''}${(() => {
+      const pulls = g.events.filter(e => e.type === 'pull'), end = [...g.events].reverse().find(e => e.type === 'goal' || e.type === 'callahan');
+      return pulls.length && end && end.t > pulls[0].t ? ` · ⏱ ${mmss(end.t - pulls[0].t)}` : '';
+    })()}</div>`}
     <div class="tabs leader-tabs" style="margin-top:14px">
       <button class="${boxTab === 'stats' ? 'on' : ''}" onclick="boxTab = 'stats'; route()">Stats</button>
       <button class="${boxTab === 'points' ? 'on' : ''}" onclick="boxTab = 'points'; route()">Points</button>
@@ -2760,10 +2909,14 @@ if (sb) {
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
   let restoredFor = null;
   sb.auth.onAuthStateChange((event, s) => {
+    // Supabase also fires this for routine things (refreshing the login, returning to the tab). Only redraw
+    // when who's signed in actually changes, so an open pop-up (e.g. picking who caught a goal) isn't closed.
+    const changed = !authReady || (s?.user.id || null) !== (session?.user.id || null) || event === 'PASSWORD_RECOVERY';
     session = s; authReady = true;
     if (event === 'PASSWORD_RECOVERY') recovering = true;
     // Unsent changes stay saved on the device (under that account) when signing out.
     if (event === 'SIGNED_OUT') { writes = []; restoredFor = null; leaveLeague(); location.hash = '#/'; }
+    if (!changed) return;
     setTimeout(() => {   // don't call Supabase from inside this callback
       if (s && restoredFor !== s.user.id) { restoredFor = s.user.id; restoreQueue(); }
       route();
