@@ -601,7 +601,7 @@ function personEntries(personId) {   // every season's roster entry for one pers
 }
 // Stats per person across every season.
 function allTimeStats() {
-  const an = analyze(db.games), people = {};
+  const an = analyze(db.games.filter(countsInSeason)), people = {};   // playoff games count only if their season says so
   for (const [pid, s] of Object.entries(an.players)) {
     const t = people[personOf(pid)] || (people[personOf(pid)] = ZERO());
     for (const k of Object.keys(ZERO())) t[k] += s[k] || 0;
@@ -1405,7 +1405,7 @@ function myStatsCard() {
   if (!db.claimsReady || isPublicView()) return '';
   const mine = myPlayer(), pending = myPendingClaim();
   if (mine) {
-    const s = statsOf(analyze(db.games.filter(g => g.seasonId === mine.team.seasonId || !db.seasonsReady)), mine.id);
+    const s = statsOf(analyze(db.games.filter(g => (g.seasonId === mine.team.seasonId || !db.seasonsReady) && countsInSeason(g))), mine.id);
     return `<a class="card game-link" href="#/profile/${mine.id}">
       <span><span class="muted">Your stats · #${esc(mine.number)} ${esc(mine.name)}</span><br>
         <b>${s.g} G · ${s.a} A · ${s.d} D · ${s.to} TO</b> <span class="muted">· ${s.pm >= 0 ? '+' : ''}${s.pm}</span></span>
@@ -1488,11 +1488,14 @@ function renderProfile(pid) {
   const p = t.players.find(x => x.id === pid);
   const played = db.games.filter(g => g.status !== 'scheduled' && (g.homeId === t.id || g.awayId === t.id))
     .sort((a, b) => b.created - a.created);
-  const an = analyze(played), s = statsOf(an, pid);
+  // Season totals follow the playoff-stats choice; playoffs kept separately get their own line.
+  const an = analyze(played.filter(countsInSeason)), s = statsOf(an, pid);
+  const playoffGames = played.filter(countsInPlayoffs);
+  const ps = playoffGames.length ? statsOf(analyze(playoffGames), pid) : null;
   const signed = v => (v > 0 ? `+${v}` : `${v}`);
-  const rows = played.map(g => {
+  const rows = played.filter(playoffStatsKept).map(g => {
     const opp = team(g.homeId === t.id ? g.awayId : g.homeId), us = score(g, t.id), them = score(g, opp.id);
-    return { gm: g, opp, name: opp.name, result: `${g.status === 'live' ? 'LIVE ' : us > them ? 'W ' : us < them ? 'L ' : 'T '}${us}–${them}`, ...statsOf(analyze([g]), pid) };
+    return { gm: g, opp, name: opp.name, result: `${isPlayoff(g) ? '🏆 ' : ''}${g.status === 'live' ? 'LIVE ' : us > them ? 'W ' : us < them ? 'L ' : 'T '}${us}–${them}`, ...statsOf(analyze([g]), pid) };
   });
   // Who they throw to most, and who throws to them most.
   const top = (list, n = 5) => Object.entries(list.reduce((m, id) => ({ ...m, [id]: (m[id] || 0) + 1 }), {}))
@@ -1510,7 +1513,7 @@ function renderProfile(pid) {
   const allTime = entries.length > 1 ? (() => {
     const at = allTimeStats()[p.personId] || finishPlayer(ZERO());
     const perSeason = entries.map(e => {
-      const games = db.games.filter(g => g.status !== 'scheduled' && (g.homeId === e.team.id || g.awayId === e.team.id));
+      const games = db.games.filter(g => g.status !== 'scheduled' && (g.homeId === e.team.id || g.awayId === e.team.id) && countsInSeason(g));
       return { ...e, name: seasonName(e.team.seasonId), gp: games.length, ...statsOf(analyze(games), e.id) };
     }).reverse();
     return `<h2>All time · ${entries.length} seasons</h2>
@@ -1547,6 +1550,8 @@ function renderProfile(pid) {
     <h2>Playing time</h2>
     ${tiles([['Points played', s.pp, `${s.op} O · ${s.dp} D`], ['Minutes', fmtInt(s.min)], ['Plus/minus', signed(s.pm)],
       ['O / D efficiency', `${fmtDec(s.oe)} / ${fmtDec(s.de)}`, 'Per O-line / D-line point']])}
+    ${ps ? `<h2>🏆 Playoffs</h2>
+    ${tiles([['Games', playoffGames.length], ['Goals', ps.g], ['Assists', ps.a], ['Ds', ps.d], ['Points played', ps.pp], ['Plus/minus', signed(ps.pm)]])}` : ''}
     ${barList('Throws to', throwsTo, 'thrown to each teammate')}
     ${barList('Catches from', catchesFrom, 'caught from each teammate')}
     <h2>Game by game</h2>
@@ -2524,7 +2529,10 @@ function renderBox(g) {
     return who.length ? [label, `${who.map(p => p.name).slice(0, 3).join(', ')}${who.length > 3 ? '…' : ''} (${best})`] : null;
   }).filter(Boolean);
 
-  const statsTab = `
+  const statsTab = !playoffStatsKept(g) ? `
+    ${scoreChart(r)}
+    <p class="muted">Player stats aren’t kept for playoff games this season (chosen when the playoffs were set up). The score and play-by-play are still here.</p>` : `
+    ${isPlayoff(g) && !countsInSeason(g) ? '<p class="muted">🏆 Playoff game: these stats count toward playoff stats, not the regular season.</p>' : ''}
     ${leaders.length ? `<div class="card"><div class="chart-title">Game leaders</div>
       <div class="leaders-list">${leaders.map(([l, v]) => `<div><span class="muted">${l}</span><b>${esc(v)}</b></div>`).join('')}</div></div>` : ''}
     ${scoreChart(r)}
@@ -2607,9 +2615,12 @@ function pickLeaderSeason(v) {
   route();   // loads the seasons it needs first
 }
 
+let leaderPhase = 'season';   // 'season' or 'playoffs' (when playoff stats are kept separately)
 function renderLeaders() {
   if (leaderScope === 'all' && db.seasonsReady) return renderAllTimeLeaders();
-  const teams = seasonTeams(), games = seasonGames();
+  const sid = viewSeason()?.id, playoffTab = db.playoffsReady && hasPlayoffTab(sid);
+  if (!playoffTab) leaderPhase = 'season';
+  const teams = seasonTeams(), games = seasonGames().filter(leaderPhase === 'playoffs' ? countsInPlayoffs : countsInSeason);
   const an = analyze(games);
   // "Teams" view: pick a team (defaults to your own claimed team, else the first one).
   if (leaderView === 'team' && !teams.some(x => x.id === leaderTeamId)) leaderTeamId = teams.find(x => x.players.some(p => p.userId === me()))?.id || teams[0]?.id;
@@ -2623,6 +2634,10 @@ function renderLeaders() {
     <div class="row"><h1>Leaders</h1>${db.seasonsReady ? '<a class="btn small" href="#/hof">🏆 Hall of Fame</a>' : ''}
       <button class="small" onclick="exportPlayerStats()" title="Download as a spreadsheet">⬇ CSV</button></div>
     ${seasonPicker('pickLeaderSeason', [['all', 'All time', false]])}
+    ${playoffTab ? `<div class="cat-tabs phase-tabs">
+      <button class="${leaderPhase === 'season' ? 'on' : ''}" onclick="leaderPhase = 'season'; renderLeaders()">${playoffStatsMode(sid) === 'both' ? 'Season (with playoffs)' : 'Regular season'}</button>
+      <button class="${leaderPhase === 'playoffs' ? 'on' : ''}" onclick="leaderPhase = 'playoffs'; renderLeaders()">🏆 Playoffs</button>
+    </div>` : ''}
     <div class="tabs leader-tabs">
       <button class="${t ? '' : 'on'}" onclick="leaderView = 'all'; renderLeaders()">All</button>
       <button class="${t ? 'on' : ''}" onclick="leaderView = 'team'; renderLeaders()">Teams</button>
@@ -2743,7 +2758,7 @@ function renderTeamPage(tid) {
   const t = team(tid);
   if (!t) { location.hash = '#/teams'; return; }
   const games = db.games.filter(g => g.homeId === tid || g.awayId === tid);
-  const an = analyze(games);
+  const an = analyze(games.filter(countsInSeason));   // playoff games count only if the season's playoff-stats choice says so
   const ts = an.teams[tid] || { ...TEAM_ZERO(), w: 0, l: 0, t: 0, gp: 0, offProd: null, conv: null };
   const diff = ts.scored - ts.allowed;
   teamSort = sortKeyFor(teamSort);

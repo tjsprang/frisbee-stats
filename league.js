@@ -60,6 +60,28 @@ function renderStandings() {
 // A single-elimination bracket stored on the season as { size, seeds: [teamId, …] } (seed 1 first).
 // Round 1 pairs seeds the standard way (1 v 8, 4 v 5, 2 v 7, 3 v 6 …). Missing seeds are byes: the higher seed
 // goes straight through. Each later-round game is created once both of its teams are known.
+// How playoff games count toward player stats, chosen when the bracket is set up (stored with it).
+const PLAYOFF_STATS = {
+  combined: ['Count with the regular season', 'Playoff stats add into each player’s season totals.'],
+  separate: ['Keep them separate', 'Season totals stay regular season only. Playoff stats get their own Playoffs tab on Leaders.'],
+  both: ['Both', 'Season totals include the playoffs, and a Playoffs tab also shows playoff-only stats.'],
+  none: ['Don’t keep stats', 'Playoff games still get scores and play-by-play, but no player stats are counted.']
+};
+const playoffStatsMode = seasonId => db.seasons.find(s => s.id === seasonId)?.playoffs?.stats || 'combined';   // older brackets: combined
+const isPlayoff = g => g.stage === 'playoff';
+// Does this game count toward season totals (and all-time)? Toward the separate playoff stats?
+const countsInSeason = g => !isPlayoff(g) || ['combined', 'both'].includes(playoffStatsMode(g.seasonId));
+const countsInPlayoffs = g => isPlayoff(g) && ['separate', 'both'].includes(playoffStatsMode(g.seasonId));
+const playoffStatsKept = g => !isPlayoff(g) || playoffStatsMode(g.seasonId) !== 'none';
+const hasPlayoffTab = seasonId => ['separate', 'both'].includes(playoffStatsMode(seasonId))
+  && db.games.some(g => g.seasonId === seasonId && isPlayoff(g) && g.status !== 'scheduled');
+
+function playoffStatsOptions(current) {
+  return `<div class="options">${Object.entries(PLAYOFF_STATS).map(([k, [title, text]]) => `
+    <label class="card option"><input type="radio" name="pstats" value="${k}" ${k === current ? 'checked' : ''} onchange="playoffStats = this.value">
+      <span><b>${title}</b><div class="muted">${text}</div></span></label>`).join('')}</div>`;
+}
+
 function seedOrder(size) {
   let o = [1, 2];
   while (o.length < size) { const n = o.length * 2 + 1; o = o.flatMap(s => [s, n - s]); }
@@ -112,7 +134,7 @@ function advanceBracket(season = activeSeason()) {
   }
 }
 
-let playoffSize = null;
+let playoffSize = null, playoffStats = 'both';
 function renderPlayoffs() {
   const s = viewSeason();
   if (!db.playoffsReady) { app.innerHTML = '<h1>Playoffs</h1><p class="msg error">Playoffs need a database update (supabase/008_playoffs.sql).</p>'; return; }
@@ -132,7 +154,9 @@ function renderPlayoffs() {
         <p class="muted">Seeded from the current standings. ${playoffSize & (playoffSize - 1) ? 'Top seeds get a first-round bye.' : ''}</p>
         <ol class="seed-list">${table.slice(0, playoffSize).map(r => `<li><span class="dot" style="background:${esc(r.team.color)}"></span>${esc(r.team.name)}
           <span class="muted">${r.w}–${r.l}${r.t ? `–${r.t}` : ''}</span></li>`).join('')}</ol>
-        <button class="primary" style="width:100%" onclick="createPlayoffs()">Create bracket</button>
+        <h3 style="margin:18px 0 8px">Player stats in the playoffs</h3>
+        ${playoffStatsOptions(playoffStats)}
+        <button class="primary" style="width:100%;margin-top:14px" onclick="createPlayoffs()">Create bracket</button>
       </div>`}`;
     return;
   }
@@ -160,14 +184,36 @@ function renderPlayoffs() {
     <div class="bracket">${Array.from({ length: b.rounds }, (_, i) => i + 1).map(r => `
       <div class="bround"><div class="bround-name">${roundName(r, b.rounds)}</div>${byRound(r).map(card).join('')}</div>`).join('')}
     </div>
-    ${canEdit() ? '<button class="small" style="margin-top:12px" onclick="resetPlayoffs()">Reset playoffs</button>' : ''}`;
+    <p class="muted" style="margin-top:14px">Player stats: <b>${PLAYOFF_STATS[playoffStatsMode(s.id)][0]}</b>. ${PLAYOFF_STATS[playoffStatsMode(s.id)][1]}</p>
+    ${canEdit() ? `<div class="row" style="margin-top:4px">
+      <button class="small" onclick="changePlayoffStatsSheet()">Change how stats count</button>
+      <button class="small" onclick="resetPlayoffs()">Reset playoffs</button></div>` : ''}`;
+}
+
+function changePlayoffStatsSheet() {
+  playoffStats = playoffStatsMode(activeSeason().id);
+  openSheet(`<h3>Player stats in the playoffs</h3>
+    ${playoffStatsOptions(playoffStats)}
+    <div class="actions" style="margin-top:12px">
+      <button onclick="closeSheet()">Cancel</button>
+      <button class="goal" onclick="savePlayoffStats()">Save</button>
+    </div>`);
+}
+
+async function savePlayoffStats() {
+  const s = activeSeason(), def = { ...s.playoffs, stats: playoffStats };
+  const { data, error } = await sb.rpc('set_season_playoffs', { p_season_id: s.id, p_playoffs: def });
+  if (error) return toast(dbErrorText(error));
+  s.playoffs = data.playoffs;
+  toast(`Playoff stats: ${PLAYOFF_STATS[playoffStats][0]}.`);
+  closeSheet(); renderPlayoffs();
 }
 
 async function createPlayoffs() {
   const s = activeSeason(), table = standings(seasonTeams(), seasonGames());
   const seeds = table.slice(0, playoffSize).map(r => r.team.id);
   let size = 2; while (size < seeds.length) size *= 2;
-  const def = { size, seeds };
+  const def = { size, seeds, stats: playoffStats };
   const { data, error } = await sb.rpc('set_season_playoffs', { p_season_id: s.id, p_playoffs: def });
   if (error) return toast(dbErrorText(error));
   s.playoffs = data.playoffs;

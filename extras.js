@@ -219,10 +219,11 @@ function exportPlayerStats() {
     rows = allPlayers().filter(p => !seen.has(p.personId) && seen.add(p.personId))
       .map(p => [personEntries(p.personId).at(-1).name, personEntries(p.personId).at(-1).team.name, ...ALL_STAT_COLS.map(c => statCell(c, people[p.personId] || finishPlayer(ZERO())))]);
   } else {
-    const an = analyze(seasonGames());
+    const playoffs = leaderPhase === 'playoffs';
+    const an = analyze(seasonGames().filter(playoffs ? countsInPlayoffs : countsInSeason));
     rows = seasonTeams().flatMap(t => t.players.map(p => [p.name, t.name, ...ALL_STAT_COLS.map(c => statCell(c, statsOf(an, p.id)))]));
   }
-  download(`${fileStem(allTime ? 'all-time-stats' : `${viewSeason()?.name || 'season'}-stats`)}.csv`,
+  download(`${fileStem(allTime ? 'all-time-stats' : `${viewSeason()?.name || 'season'}-${leaderPhase === 'playoffs' ? 'playoff-' : ''}stats`)}.csv`,
     csv([['Player', 'Team', ...ALL_STAT_COLS.map(c => (c[3] === fmtPct ? `${c[2]} (%)` : c[2]))], ...rows]));
 }
 
