@@ -1,7 +1,7 @@
 // Frisbee Stats service worker: keeps the app's own files so it opens without signal.
 // League data isn't handled here (the app keeps its own copy); Supabase requests go straight to the network.
-const CACHE = 'frisbee-stats-v2';
-const SHELL = ['./', './index.html', './stats.js', './league.js', './extras.js', './manifest.webmanifest', './icon-192.png', './icon-512.png',
+const CACHE = 'frisbee-stats-v3';
+const SHELL = ['./', './index.html', './stats.js', './league.js', './extras.js', './teamadmin.js', './manifest.webmanifest', './icon-192.png', './icon-512.png',
   'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2'];
 
 self.addEventListener('install', e => {

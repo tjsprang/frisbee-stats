@@ -289,6 +289,10 @@
   .actions.lineup button.tired.in { box-shadow: inset 0 0 0 2px #eda100; }
   .tired-key { display: block; font-size: 12px; margin-top: 2px; }
 
+  /* Team admins */
+  .team-admins { font-size: 12px; margin: -2px 0 6px; }
+  .link-btn { border: 0; background: none; padding: 0 2px; color: var(--muted); font-size: 12px; cursor: pointer; }
+
   /* End-of-season card on the Games page */
   .season-card { border: 2px solid var(--accent); }
   .season-card.champion-card { border-color: #eda100; }
@@ -372,6 +376,7 @@
 <script src="stats.js"></script>
 <script src="league.js"></script>
 <script src="extras.js"></script>
+<script src="teamadmin.js"></script>
 <link rel="manifest" href="manifest.webmanifest">
 <meta name="theme-color" content="#0f1115">
 <link rel="apple-touch-icon" href="icon-180.png">
@@ -516,7 +521,7 @@ async function fetchLeague(id, alsoSeasons = []) {
   const seasons = await sb.from('seasons').select('*').eq('league_id', id).order('number');   // fails until supabase/006
   const active = seasons.data?.find(s => s.status === 'active');
   const loadIds = !seasons.error && active ? [...new Set([active.id, ...alsoSeasons])] : null;   // null = everything
-  const [lg, teams, players, [games, events], passProbe, hof, playoffProbe, profiles, avail] = await Promise.all([
+  const [lg, teams, players, [games, events], passProbe, hof, playoffProbe, profiles, avail, teamAdmins, teamRequests] = await Promise.all([
     sb.from('leagues').select('*').eq('id', id).single()   // '*' so columns added by later updates are optional
       .then(r => { if (r.error) throw r.error; return r.data; }),
     fetchAll('teams', id, ['created_at', 'id']),
@@ -526,7 +531,9 @@ async function fetchLeague(id, alsoSeasons = []) {
     sb.from('hall_of_fame').select('*').eq('league_id', id).order('inducted_at'),   // fails until supabase/006
     sb.from('games').select('stage').limit(1),   // fails until supabase/008 has been run
     sb.from('person_profiles').select('*').eq('league_id', id),   // these two fail until supabase/010
-    sb.from('availability').select('*').eq('league_id', id)
+    sb.from('availability').select('*').eq('league_id', id),
+    sb.from('team_admins').select('*').eq('league_id', id),   // these two fail until supabase/012
+    sb.from('team_requests').select('*').eq('league_id', id).order('created_at')
   ]);
   const claims = await fetchClaims(id);
   const next = {
@@ -541,6 +548,9 @@ async function fetchLeague(id, alsoSeasons = []) {
     profiles: Object.fromEntries((profiles.data || []).map(p => [p.person_id, p])),
     availReady: !avail.error,
     avail: avail.data || [],
+    teamAdminsReady: !teamAdmins.error,   // false until supabase/012_team_admins.sql has been run
+    teamAdmins: teamAdmins.data || [],
+    teamRequests: teamRequests.data || [],
     claims: claims || [],
     claimsReady: !!claims,           // false until supabase/004_player_claims.sql has been run
     passReady: !passProbe.error,     // false until supabase/005_pass_by_pass.sql has been run
@@ -826,6 +836,17 @@ function subscribeLeague(id) {
     on('INSERT', 'hall_of_fame', p => remoteHof(p.new));
     on('DELETE', 'hall_of_fame', p => { if (db.hof.some(h => h.id === p.old.id)) refreshLeague(); }, null);
   }
+  if (db.teamAdminsReady) {   // only once supabase/012 has been run
+    on('INSERT', 'team_requests', p => {
+      if (isAdmin() && p.new.user_id !== me()) notify(`🧢 ${p.new.user_email || 'Someone'} ${p.new.kind === 'new' ? `wants to add ${p.new.name}` : 'wants to manage a team'}`, '#/games');
+      refreshLeague();
+    });
+    on('UPDATE', 'team_requests', p => {
+      if (p.new.user_id === me() && p.new.status !== 'pending') notify(p.new.status === 'approved' ? '✅ Your team request was approved' : 'Your team request was denied', '#/teamadmin');
+      refreshLeague();
+    });
+    on('*', 'team_admins', refreshLeague);
+  }
   if (db.profilesReady) {   // only once supabase/010 has been run
     on('*', 'person_profiles', refreshLeague);
     on('*', 'availability', refreshLeague);
@@ -984,13 +1005,14 @@ function route() {
   updateBell();
   document.body.classList.toggle('no-nav', !inLeague);
   document.body.classList.toggle('player', !isAdmin());
-  document.getElementById('modeTag').textContent = inLeague ? (isAdmin() ? 'Admin' : 'Player') : '';
+  document.getElementById('modeTag').textContent = inLeague ? (isAdmin() ? 'Admin' : isTeamMode() ? 'Team admin' : isPublicView() ? 'Public' : 'Player') : '';
   document.querySelectorAll('[data-nav]').forEach(a =>
     a.classList.toggle('on', (a.dataset.nav === 'games' && ['games', 'game', 'box', 'schedule', 'settings'].includes(page))
       || (a.dataset.nav === 'teams' && (page === 'profile' || page === 'team'))
       || (a.dataset.nav === 'leaders' && page === 'hof') || (a.dataset.nav === 'standings' && page === 'playoffs')
       || a.dataset.nav === page));
   if (page === 'admin') return id === 'create' ? renderCreateLeague() : renderAdminHome();
+  if (page === 'teamadmin') return id ? renderTeamRequest(id) : renderTeamAdminHome();
   if (page === 'player') return renderPlayerHome();
   if (!inLeague) {
     if (isPublicView()) { location.hash = '#/games'; return; }   // public viewers stay in their league
@@ -1012,10 +1034,10 @@ function route() {
     loadSeasons(missing);
     return;
   }
-  if (page === 'game' && game(id)) return isAdmin() ? renderTracker(game(id)) : renderBox(game(id));
+  if (page === 'game' && game(id)) return canTrack(game(id)) ? renderTracker(game(id)) : renderBox(game(id));
   if (page === 'box' && game(id)) { renderBox(game(id)); return tickClocks(); }
   if (page === 'leaders') return renderLeaders();
-  if (page === 'teams') return isAdmin() ? renderTeams() : renderRosters();
+  if (page === 'teams') return isAdmin() || (isTeamMode() && db.teamAdminsReady) ? renderTeams() : renderRosters();
   if (page === 'profile') return renderProfile(id);
   if (page === 'team') return renderTeamPage(id);
   if (page === 'hof') return renderHallOfFame();
@@ -1032,7 +1054,7 @@ function renderMenu() {
     <h1>Main menu</h1>
     ${league && mode ? `<a class="card game-link" href="#/games" style="${borderStyle(league.border_colors)}">
       <span><span class="muted">Continue</span><br><b>${esc(league.name)}</b></span>
-      <span class="badge">${isAdmin() ? 'ADMIN' : 'PLAYER'} →</span></a>` : ''}
+      <span class="badge">${isAdmin() ? 'ADMIN' : isTeamMode() ? 'TEAM ADMIN' : 'PLAYER'} →</span></a>` : ''}
     <div class="menu">
       <a class="card" href="#/player">
         <span class="icon">🏃</span>
@@ -1041,6 +1063,10 @@ function renderMenu() {
       <a class="card" href="#/admin">
         <span class="icon">📋</span>
         <span><b>League Admin</b><span class="muted">Create or join a league, track live games and manage rosters.</span></span>
+      </a>
+      <a class="card" href="#/teamadmin">
+        <span class="icon">🧢</span>
+        <span><b>Team Admin</b><span class="muted">Register your team in a league, manage its roster, and track its games.</span></span>
       </a>
     </div>
     ${installCard()}
@@ -1226,7 +1252,10 @@ function searchLeagues(kind) {
       box.innerHTML = `<p class="muted">${q ? 'No leagues match that name.' : 'No leagues have been created yet.'}</p>`;
       return;
     }
-    box.innerHTML = data.map(l => kind === 'player'
+    box.innerHTML = data.map(l => kind === 'team'
+      ? `<a class="card game-link" href="#/teamadmin/${l.id}" style="${borderStyle(l.border_colors)}">
+          <span><b>${esc(l.name)}</b></span><span class="muted">Register or manage a team →</span></a>`
+      : kind === 'player'
       ? `<a class="card game-link" href="#/games" style="${borderStyle(l.border_colors)}" onclick="enterLeague(leagueCache['${l.id}'], 'player'); return false">
           <span><b>${esc(l.name)}</b>${live.has(l.id) ? liveBadge : ''}</span><span class="muted">View →</span></a>`
       : myLeagueIds.has(l.id)
@@ -1301,10 +1330,10 @@ function gameCard(g) {
       <div class="muted">${g.stage === 'playoff' ? `🏆 Playoffs · ${roundName(g.round, Math.log2(db.seasons.find(s => s.id === g.seasonId)?.playoffs?.size || 2))}${upcoming ? '' : ' · '}` : ''}${upcoming
         ? (g.stage === 'playoff' ? '' : `${fmtWhen(g.when)} · Field ${g.field} · Round ${g.round}`) : new Date(g.created).toLocaleDateString()}</div>
     </div>`;
-  if (upcoming) return `<div class="card"><div class="game-link">${info}${canEdit()
+  if (upcoming) return `<div class="card"><div class="game-link">${info}${canTrack(g)
     ? `<button class="small primary" onclick="startScheduled('${g.id}')">Start</button>`
     : '<span class="badge scheduled">UPCOMING</span>'}</div>${availabilityLine(g)}</div>`;
-  return `<a class="card game-link" href="#/${g.status === 'live' && isAdmin() ? 'game' : 'box'}/${g.id}">
+  return `<a class="card game-link" href="#/${g.status === 'live' && canTrack(g) ? 'game' : 'box'}/${g.id}">
     ${info}<span class="badge ${g.status}">${STATUS[g.status]}</span></a>`;
 }
 
@@ -1320,7 +1349,7 @@ function renderGames() {
       <div class="row">
         <h1 style="margin:0">${esc(league.name)}</h1>
         ${isAdmin() ? '<a class="btn small" href="#/settings">⚙️ Settings</a>' : ''}
-        ${isPublicView() ? '' : `<a class="btn small" href="#/${isAdmin() ? 'admin' : 'player'}">Switch league</a>`}
+        ${isPublicView() ? '' : `<a class="btn small" href="#/${isAdmin() ? 'admin' : isTeamMode() ? 'teamadmin' : 'player'}">Switch league</a>`}
       </div>
       ${s ? `<div class="muted" style="margin-top:4px">${esc(s.name)}${s.status === 'archived' ? ' · finished' : ''}</div>` : ''}
     </div>
@@ -1337,8 +1366,23 @@ function renderGames() {
         <button class="primary" onclick="uploadLegacy(this)">Upload</button>
       </div>
     </div>` : ''}
-    ${isAdmin() ? claimRequestsCard() : myStatsCard()}
+    ${teamRequestsCard()}
+    ${isAdmin() ? claimRequestsCard() : isTeamMode() ? claimRequestsCard() + myStatsCard() : myStatsCard()}
     ${seasonStatusCard()}
+    ${!edit && isTeamMode() && !viewingPast() && db.teamAdminsReady ? (() => {
+      const mine = myTeamsThisSeason(), others = teams;
+      if (!mine.length) return `<div class="card"><b>You don’t manage a team in ${esc(s?.name || 'this season')}.</b>
+        <div class="muted">Ask a league admin, or <a href="#/teamadmin">register your team</a>.</div></div>`;
+      return `<div class="card">
+        <div class="muted" style="margin-bottom:8px">Start a game for your team</div>
+        <div class="row">
+          <select id="home">${mine.map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join('')}</select>
+          <span style="flex:0 0 auto">vs</span>
+          <select id="away">${others.map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join('')}</select>
+        </div>
+        <button class="primary" style="width:100%;margin-top:10px" onclick="newGame()">Start tracking</button>
+      </div>`;
+    })() : ''}
     ${edit && teams.length < 2 ? `<div class="card">
       <b>Add your teams first</b>
       <div class="muted">You need at least two teams to start a game. Add them on the <a href="#/teams">Teams</a> tab.</div>
@@ -1359,7 +1403,10 @@ function renderGames() {
       ${upcoming.map(gameCard).join('')}` : ''}
     ${results.length ? `<h2>Results</h2>${results.map(gameCard).join('')}` : ''}
     ${seasonOverLink()}`;
-  if (document.getElementById('away')) document.getElementById('away').value = teams[1].id;
+  const home = document.getElementById('home'), away = document.getElementById('away');
+  if (away) away.value = (teams.find(t => t.id !== home.value) || teams[1]).id;
+  // League admins: create any playoff games whose teams are now known (e.g. after a team admin finished a game).
+  if (edit && db.playoffsReady) advanceBracket();
 }
 
 // ---------- Player claims ----------
@@ -2588,11 +2635,11 @@ function renderBox(g) {
       <button class="small" onclick="exportBoxScore('${g.id}')">⬇ Box score CSV</button>
       <button class="small" onclick="exportPlays('${g.id}')">⬇ Play-by-play CSV</button>
     </div>
-    ${isAdmin() && (!db.seasonsReady || inActiveSeason(g)) ? `<div class="row">
+    ${canTrack(g) ? `<div class="row">
       ${g.status === 'live'
         ? `<a class="btn primary" href="#/game/${g.id}">Back to tracking</a>`
         : `<button onclick="reopen('${g.id}')">Reopen game</button>`}
-      <button onclick="deleteGame('${g.id}')">Delete game</button>
+      ${isAdmin() ? `<button onclick="deleteGame('${g.id}')">Delete game</button>` : ''}
     </div>` : ''}`;
 }
 
@@ -2798,8 +2845,9 @@ function renderTeams() {
     <h1>Teams</h1>
     ${seasonPicker('pickSeason')}
     ${viewingPast() ? `<div class="card past-season">📚 ${esc(viewSeason().name)} is finished, so its teams can’t be changed.</div>` : ''}
+    ${isTeamMode() && !edit ? '<p class="muted">You can edit the teams you manage. Other teams are read-only.</p>' : ''}
     ${teams.length ? '' : `<p class="muted">No teams yet.${edit ? ' Add your first team below.' : ''}</p>`}
-    ${teams.map(t => editing && editing.id === t.id ? teamEditor(editing) : teamCard(t, edit)).join('')}
+    ${teams.map(t => editing && editing.id === t.id ? teamEditor(editing) : teamCard(t, managesTeam(t.id))).join('')}
     ${edit ? `<div class="card">
       <div class="muted" style="margin-bottom:8px">Add a team</div>
       <div class="row">
@@ -2816,14 +2864,15 @@ function teamCard(t, edit = true) {
     <div class="card">
       <div class="row" style="margin-bottom:6px">
         <h2 style="margin:0;flex:1"><a href="#/team/${t.id}" style="color:inherit"><span class="dot" style="background:${esc(t.color)}"></span>${esc(t.name)}</a></h2>
-        ${edit ? `<button class="small" onclick="editTeam('${t.id}')">Edit</button>
-        <button class="small danger" onclick="deleteTeamById('${t.id}')">Delete</button>` : ''}
+        ${edit ? `<button class="small" onclick="editTeam('${t.id}')">Edit</button>` : ''}
+        ${edit && isAdmin() ? `<button class="small danger" onclick="deleteTeamById('${t.id}')">Delete</button>` : ''}
       </div>
+      ${teamAdminsLine(t)}
       ${t.players.length ? `<ul class="roster">${t.players.map(p => `
         <li><a href="#/profile/${p.id}" class="roster-name">${avatar({ ...p, team: t }, 28)}<span class="muted">#${esc(p.number)}</span> ${esc(p.name)}</a>
           ${p.userId ? `<span class="row" style="flex:0 0 auto">
             <span class="muted claimed" title="Claimed">✓ ${esc(claimedBy(p.id) || 'Claimed')}</span>
-            <button class="small" onclick="releasePlayer('${p.id}')">Unlink</button></span>` : ''}</li>`).join('')}
+            ${isAdmin() ? `<button class="small" onclick="releasePlayer('${p.id}')">Unlink</button>` : ''}</span>` : ''}</li>`).join('')}
       </ul>` : '<div class="muted">No players yet. Tap Edit to add some.</div>'}
     </div>`;
 }
@@ -2853,7 +2902,7 @@ function teamEditor(t) {
       </div>
       <div id="suggest"></div>
       <div class="row" style="margin-top:18px">
-        <button onclick="deleteTeam()">Delete team</button>
+        ${isAdmin() ? '<button onclick="deleteTeam()">Delete team</button>' : ''}
         <button onclick="cancelEdit()">Cancel</button>
         <button class="primary" onclick="saveTeam()">Save</button>
       </div>

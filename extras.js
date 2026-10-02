@@ -147,7 +147,8 @@ async function removePhoto(pid) {
 
 // ---------- Availability for upcoming games ----------
 const availOf = (gid, pid) => db.avail?.find(a => a.game_id === gid && a.player_id === pid)?.status || null;
-const canSetAvail = p => db.availReady && !isPublicView() && (isAdmin() || (p.userId && p.userId === me()));
+const canSetAvail = p => db.availReady && !isPublicView()
+  && (isAdmin() || (p.userId && p.userId === me()) || (typeof managesTeam === 'function' && managesTeam(teamOf(p.id)?.id)));
 const AVAIL = { yes: '✓ In', maybe: '? Maybe', no: '✗ Out' };
 
 function setAvailability(gid, pid, status) {
@@ -176,7 +177,7 @@ function availabilityLine(g) {
   return `<div class="avail-line">
     ${mine ? `<span class="avail-buttons"><span class="muted">You:</span>${Object.entries(AVAIL).map(([k, label]) =>
       `<button class="small ${availOf(g.id, mine.id) === k ? `on-${k}` : ''}" onclick="setAvailability('${g.id}', '${mine.id}', '${k}')">${label}</button>`).join('')}</span>` : ''}
-    ${isAdmin() ? `<button class="small" onclick="availabilitySheet('${g.id}')">👥 ${counts(g.homeId)} · ${counts(g.awayId)}</button>` : ''}
+    ${isAdmin() || managesTeam(g.homeId) || managesTeam(g.awayId) ? `<button class="small" onclick="availabilitySheet('${g.id}')">👥 ${counts(g.homeId)} · ${counts(g.awayId)}</button>` : ''}
   </div>`;
 }
 
@@ -188,7 +189,7 @@ function availabilitySheet(gid) {
     ${[g.homeId, g.awayId].map(tid => `<h4><span class="dot" style="background:${team(tid).color}"></span>${esc(team(tid).name)}</h4>
       ${team(tid).players.map(p => `<div class="avail-row"><span>#${esc(p.number)} ${esc(p.name)}</span>
         <span class="avail-buttons">${Object.entries(AVAIL).map(([k, label]) =>
-          `<button class="small ${availOf(gid, p.id) === k ? `on-${k}` : ''}" onclick="setAvailability('${gid}', '${p.id}', '${k}')">${label}</button>`).join('')}</span></div>`).join('')}`).join('')}
+          `<button class="small ${availOf(gid, p.id) === k ? `on-${k}` : ''}" ${canSetAvail(p) ? `onclick="setAvailability('${gid}', '${p.id}', '${k}')"` : 'disabled'}>${label}</button>`).join('')}</span></div>`).join('')}`).join('')}
     <button style="width:100%;margin-top:12px" onclick="closeSheet()">Done</button></div>`);
 }
 
