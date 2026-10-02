@@ -73,7 +73,9 @@
   .players { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
   .player {
     text-align: left; padding: 14px 12px; min-height: 72px; background: var(--card);
-    border-left: 6px solid var(--team, var(--accent));
+    /* A two-tone stripe for two-colour teams: the border is colour 1, an inset shadow colour 2. */
+    border-left: 3px solid var(--team, var(--accent));
+    box-shadow: inset 3px 0 0 var(--team2, var(--team, var(--accent)));
   }
   .player .num { color: var(--muted); font-weight: 800; margin-right: 4px; }
   .player .line { display: block; font-weight: 500; font-size: 12px; color: var(--muted); margin-top: 4px; }
@@ -183,7 +185,7 @@
   /* Pass-by-pass tracker */
   .phase-head { font-size: 18px; font-weight: 800; margin: 4px 0 10px; }
   .phase .tabs button { font-size: 16px; padding: 16px 10px; }
-  .holder { font-size: 17px; border-left: 6px solid var(--team); }
+  .holder { font-size: 17px; border-left: 3px solid var(--team); box-shadow: inset 3px 0 0 var(--team2, var(--team)); }
   .play-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 14px 0 4px; }
   .play-actions button { padding: 16px 10px; font-size: 16px; }
   .play-actions .goal { background: var(--good); color: #fff; border: 0; }
@@ -288,6 +290,11 @@
   .actions.lineup button.tired:not(.in) { border-color: #eda100; }
   .actions.lineup button.tired.in { box-shadow: inset 0 0 0 2px #eda100; }
   .tired-key { display: block; font-size: 12px; margin-top: 2px; }
+
+  /* Two-colour teams */
+  .color2-toggle { display: inline-flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 14px; color: var(--muted); cursor: pointer; }
+  .color2-toggle input { width: auto; }
+  .big-dot { width: 18px; height: 18px; margin: 0; }
 
   /* Team admins */
   .team-admins { font-size: 12px; margin: -2px 0 6px; }
@@ -472,7 +479,8 @@ const toEvent = r => ({
 });
 // Season columns only exist once supabase/006 has been run.
 const seasonCols = x => (db.seasonsReady ? { season_id: x.seasonId || activeSeason()?.id } : {});
-const teamRow = t => ({ id: t.id, league_id: league.id, name: t.name, color: t.color, ...seasonCols(t) });
+const teamRow = t => ({ id: t.id, league_id: league.id, name: t.name, color: t.color, ...seasonCols(t),
+  ...(db.color2Ready ? { color2: t.color2 || null } : {}) });   // column added by 013
 const playerRows = t => t.players.map((p, i) => ({
   id: p.id, league_id: league.id, team_id: t.id, name: p.name, number: String(p.number ?? ''), sort: i,
   ...(db.seasonsReady ? { season_id: t.seasonId || activeSeason()?.id, person_id: p.personId || p.id } : {}),
@@ -521,7 +529,7 @@ async function fetchLeague(id, alsoSeasons = []) {
   const seasons = await sb.from('seasons').select('*').eq('league_id', id).order('number');   // fails until supabase/006
   const active = seasons.data?.find(s => s.status === 'active');
   const loadIds = !seasons.error && active ? [...new Set([active.id, ...alsoSeasons])] : null;   // null = everything
-  const [lg, teams, players, [games, events], passProbe, hof, playoffProbe, profiles, avail, teamAdmins, teamRequests] = await Promise.all([
+  const [lg, teams, players, [games, events], passProbe, hof, playoffProbe, profiles, avail, teamAdmins, teamRequests, color2Probe] = await Promise.all([
     sb.from('leagues').select('*').eq('id', id).single()   // '*' so columns added by later updates are optional
       .then(r => { if (r.error) throw r.error; return r.data; }),
     fetchAll('teams', id, ['created_at', 'id']),
@@ -533,11 +541,13 @@ async function fetchLeague(id, alsoSeasons = []) {
     sb.from('person_profiles').select('*').eq('league_id', id),   // these two fail until supabase/010
     sb.from('availability').select('*').eq('league_id', id),
     sb.from('team_admins').select('*').eq('league_id', id),   // these two fail until supabase/012
-    sb.from('team_requests').select('*').eq('league_id', id).order('created_at')
+    sb.from('team_requests').select('*').eq('league_id', id).order('created_at'),
+    sb.from('teams').select('color2').limit(1)   // fails until supabase/013 has been run
   ]);
   const claims = await fetchClaims(id);
   const next = {
-    teams: teams.map(t => ({ id: t.id, name: t.name, color: t.color, seasonId: t.season_id, players: [] })),
+    teams: teams.map(t => ({ id: t.id, name: t.name, color: t.color, color2: t.color2 || null, seasonId: t.season_id, players: [] })),
+    color2Ready: !color2Probe.error,   // false until supabase/013_team_colors.sql has been run
     games: games.map(toGame),
     settings: { onField: lg.on_field, timeCap: lg.time_cap ?? null },
     createdBy: lg.created_by,
@@ -963,6 +973,8 @@ async function uploadLegacy(btn) {
 }
 
 const team = id => db.teams.find(t => t.id === id);
+// A team's colour as a CSS background: solid, or split diagonally when it has a second colour.
+const teamBg = t => (t?.color2 ? `linear-gradient(135deg, ${t.color} 50%, ${t.color2} 50%)` : t?.color || '#888');
 const game = id => db.games.find(g => g.id === id);
 function player(id) {
   for (const t of db.teams) { const p = t.players.find(p => p.id === id); if (p) return p; }
@@ -1325,8 +1337,8 @@ const fmtWhen = w => new Date(w).toLocaleString([], { weekday: 'short', month: '
 function gameCard(g) {
   const h = team(g.homeId), a = team(g.awayId), upcoming = g.status === 'scheduled';
   const info = `<div>
-      <div><span class="dot" style="background:${h.color}"></span>${esc(h.name)} ${upcoming ? '' : `<b>${score(g, h.id)}</b>`}</div>
-      <div><span class="dot" style="background:${a.color}"></span>${esc(a.name)} ${upcoming ? '' : `<b>${score(g, a.id)}</b>`}</div>
+      <div><span class="dot" style="background:${teamBg(h)}"></span>${esc(h.name)} ${upcoming ? '' : `<b>${score(g, h.id)}</b>`}</div>
+      <div><span class="dot" style="background:${teamBg(a)}"></span>${esc(a.name)} ${upcoming ? '' : `<b>${score(g, a.id)}</b>`}</div>
       <div class="muted">${g.stage === 'playoff' ? `🏆 Playoffs · ${roundName(g.round, Math.log2(db.seasons.find(s => s.id === g.seasonId)?.playoffs?.size || 2))}${upcoming ? '' : ' · '}` : ''}${upcoming
         ? (g.stage === 'playoff' ? '' : `${fmtWhen(g.when)} · Field ${g.field} · Round ${g.round}`) : new Date(g.created).toLocaleDateString()}</div>
     </div>`;
@@ -1515,7 +1527,7 @@ function renderRosters() {
     ${teams.length ? '' : '<p class="muted">No teams yet.</p>'}
     ${teams.map(t => `
       <div class="card">
-        <h2 style="margin-top:0"><a href="#/team/${t.id}" style="color:inherit"><span class="dot" style="background:${esc(t.color)}"></span>${esc(t.name)}</a></h2>
+        <h2 style="margin-top:0"><a href="#/team/${t.id}" style="color:inherit"><span class="dot" style="background:${teamBg(t)}"></span>${esc(t.name)}</a></h2>
         ${t.players.length ? `<ul class="roster">${t.players.map(p => `
           <li><a href="#/profile/${p.id}" class="roster-name">${avatar({ ...p, team: t }, 28)}<span class="muted">#${esc(p.number)}</span> ${esc(p.name)}</a>
             <span class="row" style="flex:0 0 auto">${
@@ -1584,7 +1596,7 @@ function renderProfile(pid) {
     ${prof?.bio ? `<p class="bio">${esc(prof.bio)}</p>` : ''}
     ${canEditPerson(p) ? `<button class="small" style="margin-bottom:12px" onclick="editProfile('${p.id}')">✏️ Edit profile${prof ? '' : ' (add a photo and bio)'}</button>` : ''}
     ${hof ? `<a class="card hof-banner" href="#/hof">🏆 Hall of Fame${hof.note ? ` · “${esc(hof.note)}”` : ''}</a>` : ''}
-    <p class="muted"><a href="#/team/${t.id}" style="color:inherit"><span class="dot" style="background:${esc(t.color)}"></span>${esc(t.name)}</a>
+    <p class="muted"><a href="#/team/${t.id}" style="color:inherit"><span class="dot" style="background:${teamBg(t)}"></span>${esc(t.name)}</a>
       ${db.seasonsReady ? `· ${esc(seasonName(t.seasonId))}` : ''} · ${played.length} game${played.length === 1 ? '' : 's'}</p>
     ${allTime}
     ${allTime ? `<h2 style="margin-top:26px">${esc(seasonName(t.seasonId))}</h2>` : ''}
@@ -1946,8 +1958,8 @@ function previewHtml() {
       <div class="card round">
         <h3><span>Round ${i + 1}</span><span class="muted">${new Date(r.games[0]?.when || Date.now()).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })}</span></h3>
         ${r.games.map(g => `<div class="match">
-          <span><span class="dot" style="background:${team(g.homeId).color}"></span>${esc(team(g.homeId).name)}
-            <span class="muted">vs</span> <span class="dot" style="background:${team(g.awayId).color}"></span>${esc(team(g.awayId).name)}</span>
+          <span><span class="dot" style="background:${teamBg(team(g.homeId))}"></span>${esc(team(g.homeId).name)}
+            <span class="muted">vs</span> <span class="dot" style="background:${teamBg(team(g.awayId))}"></span>${esc(team(g.awayId).name)}</span>
           <span class="muted">${time(g.when)} · F${g.field}</span></div>`).join('')}
         ${r.bye ? `<div class="match muted"><span>Bye: ${esc(team(r.bye).name)}</span></div>` : ''}
       </div>`).join('')}
@@ -2000,7 +2012,7 @@ function playLog(g, limit, emptyText) {
     <li><span class="time">${mins(e)}</span>
       <span><span class="tag half">Halftime</span> ${half[0]}–${half[1]}</span></li>` : `
     <li><span class="time">${mins(e)}</span>
-      <span><span class="dot" style="background:${team(e.teamId)?.color || '#888'}"></span>
+      <span><span class="dot" style="background:${teamBg(team(e.teamId))}"></span>
       <span class="tag ${e.type}">${LABEL[e.type]}</span> ${detail(e)}</span></li>`).join('')}
   </ul>`;
 }
@@ -2068,15 +2080,15 @@ function renderTracker(g) {
   // Players on the field, then `between` (e.g. the Goal/Throwaway buttons), then the bench.
   const grid = (tid, onclick, excludeId, between = '') => {
     const r = splitRoster(g, tid, excludeId), t = team(tid);
-    return `<div class="players" style="--team:${t.color}">${r.on.map(btn(onclick)).join('')}</div>${between}
+    return `<div class="players" style="--team:${t.color};--team2:${t.color2 || t.color}">${r.on.map(btn(onclick)).join('')}</div>${between}
       ${r.bench.length ? `<div class="muted" style="margin:14px 0 8px">Bench</div>
-        <div class="players bench" style="--team:${t.color}">${r.bench.map(btn(onclick)).join('')}</div>` : ''}`;
+        <div class="players bench" style="--team:${t.color};--team2:${t.color2 || t.color}">${r.bench.map(btn(onclick)).join('')}</div>` : ''}`;
   };
   const lineupBar = tids => `<div class="row lineup-bar">
     <span class="muted">${tids.map(tid => { const r = splitRoster(g, tid);
       return `${esc(team(tid).name)}: <b>${r.hasLineup ? `${r.on.length}/${onFieldMax()}` : 'no lineup'}</b>`; }).join(' · ')}</span>
     <button class="small" onclick="openLineup()">👥 Lineup</button></div>`;
-  const dot = t => `<span class="dot" style="background:${t.color}"></span>`;
+  const dot = t => `<span class="dot" style="background:${teamBg(t)}"></span>`;
 
   let panel = '';
   if (st.phase === 'choose') {
@@ -2100,7 +2112,7 @@ function renderTracker(g) {
       ${grid(O.id, id => `recordPickup('${id}')`)}`;
   } else {
     const O = team(st.offense), holder = player(st.holder);
-    panel = `<div class="holder card" style="--team:${O.color}">
+    panel = `<div class="holder card" style="--team:${O.color};--team2:${O.color2 || O.color}">
         🥏 <b>#${esc(holder.number)} ${esc(holder.name)}</b> has the disc
         <span class="muted">· ${esc(O.name)} · ${st.passes} pass${st.passes === 1 ? '' : 'es'}</span></div>
       <div class="muted" style="margin-bottom:8px">Tap who caught the pass.</div>
@@ -2176,7 +2188,7 @@ function timeoutSheet() {
   openSheet(`
     <h3>Timeout. Which team called it?</h3>
     <div class="actions">
-      ${[g.homeId, g.awayId].map(tid => `<button onclick="recordTimeout('${tid}')"><span class="dot" style="background:${team(tid).color}"></span>${esc(team(tid).name)}
+      ${[g.homeId, g.awayId].map(tid => `<button onclick="recordTimeout('${tid}')"><span class="dot" style="background:${teamBg(team(tid))}"></span>${esc(team(tid).name)}
         <span class="muted">(${timeoutsThisHalf(g, tid)} used)</span></button>`).join('')}
       <button class="full" onclick="closeSheet()">Cancel</button>
     </div>`);
@@ -2553,7 +2565,7 @@ function sortKeyFor(key) {
 
 const playerNameCol = (showTeam = true) => ({
   k: 'name', h: 'Player', l: true,
-  f: r => `<a href="#/profile/${r.id}" style="color:inherit">${showTeam ? `<span class="dot" style="background:${r.team.color}"></span>` : `<span class="muted">#${esc(r.number)}</span> `}${esc(r.name)}</a>`
+  f: r => `<a href="#/profile/${r.id}" style="color:inherit">${showTeam ? `<span class="dot" style="background:${teamBg(r.team)}"></span>` : `<span class="muted">#${esc(r.number)}</span> `}${esc(r.name)}</a>`
 });
 const statFootnote = '<p class="muted foot">* Can’t be calculated yet (for example, no pass-by-pass games). +/- = goals + assists + Ds − drops − throwaways − stalls. Hover a column name to see what it means.</p>';
 
@@ -2584,7 +2596,7 @@ function renderBox(g) {
       <div class="leaders-list">${leaders.map(([l, v]) => `<div><span class="muted">${l}</span><b>${esc(v)}</b></div>`).join('')}</div></div>` : ''}
     ${scoreChart(r)}
     ${statCatTabs('route()')}
-    ${[h, a].map(t => `<h2><span class="dot" style="background:${t.color}"></span>${esc(t.name)} · ${score(g, t.id)}</h2>
+    ${[h, a].map(t => `<h2><span class="dot" style="background:${teamBg(t)}"></span>${esc(t.name)} · ${score(g, t.id)}</h2>
       <div class="card">${statTable(rowsFor(t), statCols(playerNameCol(false)), boxSort, 'sortBox')}</div>`).join('')}
     ${statFootnote}`;
 
@@ -2596,7 +2608,7 @@ function renderBox(g) {
       <div class="point-head"><span class="muted">#${i + 1}</span>
         <b>${esc(h.name)} ${p.score[0]}–${p.score[1]} ${esc(a.name)}</b>
         <span class="badge ${how === 'Break' || how === 'Callahan' ? 'live' : ''}">${how.toUpperCase()}</span></div>
-      <div><span class="dot" style="background:${t.color}"></span>${esc(t.name)} scored
+      <div><span class="dot" style="background:${teamBg(t)}"></span>${esc(t.name)} scored
         ${p.scorerId ? `· ${esc(player(p.scorerId).name)}${p.assistId ? ` from ${esc(player(p.assistId).name)}` : ''}` : ''}</div>
       <div class="muted">${[p.pulling ? `${esc(team(p.pulling).name)} pulled` : '', secs != null ? `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}` : '',
         r.tracked ? `${p.throws} throws` : '', `${p.turns} turnover${p.turns === 1 ? '' : 's'}`].filter(Boolean).join(' · ')}</div>
@@ -2692,10 +2704,10 @@ function renderLeaders() {
     ${leaderView === 'team' ? (db_teams.length ? `
       <div class="team-chips">${db_teams.map(x => `
         <button class="${x.id === t.id ? 'on' : ''}" style="--c:${esc(x.color)}"
-          onclick="leaderTeamId = '${x.id}'; renderLeaders()"><span class="dot" style="background:${esc(x.color)}"></span>${esc(x.name)}</button>`).join('')}
+          onclick="leaderTeamId = '${x.id}'; renderLeaders()"><span class="dot" style="background:${teamBg(x)}"></span>${esc(x.name)}</button>`).join('')}
       </div>
       <a class="card game-link" href="#/team/${t.id}">
-        <span><b><span class="dot" style="background:${esc(t.color)}"></span>${esc(t.name)}</b>
+        <span><b><span class="dot" style="background:${teamBg(t)}"></span>${esc(t.name)}</b>
           <span class="muted">· ${ts ? `${ts.w}–${ts.l}${ts.t ? `–${ts.t}` : ''} record · ${ts.scored} scored, ${ts.allowed} allowed` : 'no games yet'}</span></span>
         <span class="muted">Team stats →</span></a>` : '<p class="muted">No teams yet.</p>') : ''}
     <p class="muted">${played.length} game${played.length === 1 ? '' : 's'} played. Tap a column to sort, or a name to see that player’s games.</p>
@@ -2813,7 +2825,7 @@ function renderTeamPage(tid) {
   const flows = an.flows.filter(f => t.players.some(p => p.id === f.g));
   const played = games.filter(g => g.status !== 'scheduled').sort((x, y) => y.created - x.created);
   app.innerHTML = `
-    <div class="row"><h1><span class="dot" style="background:${esc(t.color)}"></span>${esc(t.name)}</h1>
+    <div class="row"><h1><span class="dot" style="background:${teamBg(t)}"></span>${esc(t.name)}</h1>
       <a class="btn small" href="#/leaders">← Leaders</a></div>
     <p class="muted">${ts.gp} game${ts.gp === 1 ? '' : 's'} played</p>
     ${tiles([
@@ -2852,9 +2864,12 @@ function renderTeams() {
       <div class="muted" style="margin-bottom:8px">Add a team</div>
       <div class="row">
         <input id="tn" placeholder="Team name">
-        <input id="tc" type="color" value="#f39c12">
+        <input id="tc" type="color" value="#f39c12" aria-label="Main colour">
+        ${db.color2Ready ? '<input id="tc2" type="color" value="#ffffff" aria-label="Second colour" style="display:none">' : ''}
         <button class="primary" style="flex:0 0 auto" onclick="addTeam()">Add</button>
       </div>
+      ${db.color2Ready ? `<label class="color2-toggle"><input type="checkbox" id="tc2-on"
+        onchange="document.getElementById('tc2').style.display = this.checked ? '' : 'none'"> Two colours</label>` : ''}
     </div>
     <button onclick="resetAll()" style="width:100%">Replace this season’s teams with sample teams</button>` : ''}`;
 }
@@ -2863,7 +2878,7 @@ function teamCard(t, edit = true) {
   return `
     <div class="card">
       <div class="row" style="margin-bottom:6px">
-        <h2 style="margin:0;flex:1"><a href="#/team/${t.id}" style="color:inherit"><span class="dot" style="background:${esc(t.color)}"></span>${esc(t.name)}</a></h2>
+        <h2 style="margin:0;flex:1"><a href="#/team/${t.id}" style="color:inherit"><span class="dot" style="background:${teamBg(t)}"></span>${esc(t.name)}</a></h2>
         ${edit ? `<button class="small" onclick="editTeam('${t.id}')">Edit</button>` : ''}
         ${edit && isAdmin() ? `<button class="small danger" onclick="deleteTeamById('${t.id}')">Delete</button>` : ''}
       </div>
@@ -2883,8 +2898,12 @@ function teamEditor(t) {
       <div class="muted" style="margin-bottom:6px">Team name and colour</div>
       <div class="row">
         <input value="${esc(t.name)}" placeholder="Team name" maxlength="40" oninput="editing.name = this.value">
-        <input type="color" value="${esc(t.color)}" oninput="editing.color = this.value">
+        <input type="color" value="${esc(t.color)}" oninput="editing.color = this.value; previewTeamColor()" aria-label="Main colour">
+        ${db.color2Ready && t.color2 ? `<input type="color" value="${esc(t.color2)}" oninput="editing.color2 = this.value; previewTeamColor()" aria-label="Second colour">` : ''}
       </div>
+      ${db.color2Ready ? `<label class="color2-toggle">
+        <input type="checkbox" ${t.color2 ? 'checked' : ''} onchange="editing.color2 = this.checked ? (editing.color2 || '#ffffff') : null; renderTeams()">
+        Two colours <span class="dot big-dot" id="team-color-preview" style="background:${teamBg(t)}"></span></label>` : ''}
       <div class="muted" style="margin:16px 0 6px">Players</div>
       <ul class="roster">${t.players.map((p, i) => `
         <li class="row">
@@ -2907,6 +2926,11 @@ function teamEditor(t) {
         <button class="primary" onclick="saveTeam()">Save</button>
       </div>
     </div>`;
+}
+
+function previewTeamColor() {
+  const el = document.getElementById('team-color-preview');
+  if (el) el.style.background = teamBg(editing);
 }
 
 function editTeam(id) {
@@ -3012,7 +3036,8 @@ function deleteTeamById(id) {
 function addTeam() {
   const n = document.getElementById('tn').value.trim();
   if (!n) return;
-  const t = { id: uid(), name: n, color: document.getElementById('tc').value, players: [], seasonId: activeSeason()?.id || null };
+  const color2 = document.getElementById('tc2-on')?.checked ? document.getElementById('tc2').value : null;
+  const t = { id: uid(), name: n, color: document.getElementById('tc').value, color2, players: [], seasonId: activeSeason()?.id || null };
   db.teams.push(t);
   const row = teamRow(t);
   persist({ upsert: 'teams', rows: [row] });

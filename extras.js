@@ -73,7 +73,7 @@ function avatar(p, size = 36) {
   const style = `width:${size}px;height:${size}px;font-size:${Math.round(size * 0.4)}px`;
   if (url) return `<img class="avatar" src="${esc(url)}" alt="" style="${style}" loading="lazy">`;
   const initials = (p?.name || '?').split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase();
-  return `<span class="avatar" style="${style};background:${esc(p?.team?.color || teamOf(p?.id)?.color || '#888')}">${esc(initials)}</span>`;
+  return `<span class="avatar" style="${style};background:${teamBg(p?.team || teamOf(p?.id))}">${esc(initials)}</span>`;
 }
 const canEditPerson = p => db.profilesReady && !isPublicView() && (isAdmin() || (p.userId && p.userId === me()));
 
@@ -186,7 +186,7 @@ function availabilitySheet(gid) {
   openSheet(`<div id="avail-sheet">
     <h3>Who’s coming?</h3>
     <p class="muted" style="margin-top:0">${esc(team(g.homeId).name)} vs ${esc(team(g.awayId).name)} · ${g.when ? fmtWhen(g.when) : ''}. Tap to set; tap again to clear.</p>
-    ${[g.homeId, g.awayId].map(tid => `<h4><span class="dot" style="background:${team(tid).color}"></span>${esc(team(tid).name)}</h4>
+    ${[g.homeId, g.awayId].map(tid => `<h4><span class="dot" style="background:${teamBg(team(tid))}"></span>${esc(team(tid).name)}</h4>
       ${team(tid).players.map(p => `<div class="avail-row"><span>#${esc(p.number)} ${esc(p.name)}</span>
         <span class="avail-buttons">${Object.entries(AVAIL).map(([k, label]) =>
           `<button class="small ${availOf(gid, p.id) === k ? `on-${k}` : ''}" ${canSetAvail(p) ? `onclick="setAvailability('${gid}', '${p.id}', '${k}')"` : 'disabled'}>${label}</button>`).join('')}</span></div>`).join('')}`).join('')}

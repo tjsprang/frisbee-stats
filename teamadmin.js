@@ -38,7 +38,7 @@ async function renderTeamAdminHome() {
     <p class="muted">Run your own team in a league: its roster, its games and stats, and its players’ claims and availability.</p>
     ${teams.length ? `<h2>Your teams</h2>${teams.map(t => `
       <a class="card game-link" href="#/games" style="${borderStyle(t.league.border_colors)}" onclick="enterLeague(leagueCache['${t.league.id}'], 'team'); return false">
-        <span><b><span class="dot" style="background:${esc(t.color)}"></span>${esc(t.name)}</b><br><span class="muted">${esc(t.league.name)}</span></span>
+        <span><b><span class="dot" style="background:${teamBg(t)}"></span>${esc(t.name)}</b><br><span class="muted">${esc(t.league.name)}</span></span>
         <span class="muted">Open →</span></a>`).join('')}` : ''}
     ${pending.length ? `<h2>Waiting for approval</h2>${pending.map(r => `<div class="card game-link">
       <span>${r.kind === 'new' ? `Add <b>${esc(r.name)}</b> (${r.roster.length} player${r.roster.length === 1 ? '' : 's'})` : 'Manage an existing team'}
@@ -62,6 +62,11 @@ async function cancelTeamRequest(id) {
 // ---------- Registering a team, or asking to manage one ----------
 let teamForm = null;   // { leagueId, name, color, rosterText }
 async function renderTeamRequest(leagueId) {
+  // The league's name comes from the search results, or is looked up (e.g. after a reload).
+  if (!leagueCache[leagueId]) {
+    const { data } = await sb.from('leagues').select('id, name, border_colors').eq('id', leagueId).maybeSingle();
+    if (data) leagueCache[leagueId] = data;
+  }
   const l = leagueCache[leagueId];
   app.innerHTML = `<h1>${esc(l?.name || 'League')}</h1><p class="muted">Loading teams…</p>`;
   const { data: season } = await sb.from('seasons').select('id, name').eq('league_id', leagueId).eq('status', 'active').maybeSingle();
@@ -87,7 +92,7 @@ async function renderTeamRequest(leagueId) {
     </div>
 
     ${teams?.length ? `<h2>Or manage a team that’s already there</h2>
-      ${teams.map(t => `<div class="card game-link"><span><span class="dot" style="background:${esc(t.color)}"></span><b>${esc(t.name)}</b></span>
+      ${teams.map(t => `<div class="card game-link"><span><span class="dot" style="background:${teamBg(t)}"></span><b>${esc(t.name)}</b></span>
         <button class="small" onclick="requestManage('${leagueId}', '${t.id}', this)">Ask to manage</button></div>`).join('')}` : ''}`;
 }
 
@@ -135,7 +140,7 @@ function teamRequestsCard() {
     <b>🔔 Team request${pending.length === 1 ? '' : 's'} (${pending.length})</b>
     ${pending.map(r => `<div class="claim-row">
       <span>${r.kind === 'new'
-        ? `<b>${esc(r.user_email || 'Someone')}</b> wants to add <b><span class="dot" style="background:${esc(r.color)}"></span>${esc(r.name)}</b>
+        ? `<b>${esc(r.user_email || 'Someone')}</b> wants to add <b><span class="dot" style="background:${teamBg(r)}"></span>${esc(r.name)}</b>
            <details><summary class="muted">${r.roster.length} player${r.roster.length === 1 ? '' : 's'}</summary>
            <div class="muted" style="font-size:13px">${r.roster.map(p => `${p.number ? `#${esc(p.number)} ` : ''}${esc(p.name)}`).join(' · ') || 'No players yet'}</div></details>`
         : `<b>${esc(r.user_email || 'Someone')}</b> wants to manage <b>${esc(team(r.team_id)?.name || 'a team')}</b>`}</span>

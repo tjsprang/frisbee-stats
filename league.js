@@ -48,7 +48,7 @@ function renderStandings() {
         <th class="l">Last 5</th><th title="Current streak">Strk</th></tr></thead>
       <tbody>${table.map((r, i) => `<tr class="${r.team.players.some(p => p.userId === me()) ? 'me' : ''}">
         <td>${i + 1}</td>
-        <td class="l"><a href="#/team/${r.team.id}" style="color:inherit"><span class="dot" style="background:${esc(r.team.color)}"></span>${esc(r.team.name)}</a></td>
+        <td class="l"><a href="#/team/${r.team.id}" style="color:inherit"><span class="dot" style="background:${teamBg(r.team)}"></span>${esc(r.team.name)}</a></td>
         <td>${r.gp}</td><td>${r.w}</td><td>${r.l}</td><td>${r.t}</td><td><b>${pctText(r.pct)}</b></td>
         <td>${r.pf}</td><td>${r.pa}</td><td>${r.diff > 0 ? '+' : ''}${r.diff}</td>
         <td class="l"><span class="form">${r.form.slice(-5).map(f => `<a href="#/box/${f.g.id}" class="form-${f.res}" title="${f.res === 'W' ? 'Win' : f.res === 'L' ? 'Loss' : 'Tie'}">${f.res}</a>`).join('')}</span></td>
@@ -152,7 +152,7 @@ function renderPlayoffs() {
           <select onchange="playoffSize = +this.value; renderPlayoffs()">${Array.from({ length: n - 1 }, (_, i) => i + 2).map(k =>
             `<option value="${k}" ${k === playoffSize ? 'selected' : ''}>${k} teams</option>`).join('')}</select></label>
         <p class="muted">Seeded from the current standings. ${playoffSize & (playoffSize - 1) ? 'Top seeds get a first-round bye.' : ''}</p>
-        <ol class="seed-list">${table.slice(0, playoffSize).map(r => `<li><span class="dot" style="background:${esc(r.team.color)}"></span>${esc(r.team.name)}
+        <ol class="seed-list">${table.slice(0, playoffSize).map(r => `<li><span class="dot" style="background:${teamBg(r.team)}"></span>${esc(r.team.name)}
           <span class="muted">${r.w}–${r.l}${r.t ? `–${r.t}` : ''}</span></li>`).join('')}</ol>
         <h3 style="margin:18px 0 8px">Player stats in the playoffs</h3>
         ${playoffStatsOptions(playoffStats)}
@@ -165,7 +165,7 @@ function renderPlayoffs() {
     const tid = m.teams[i], t = tid && team(tid), g = m.game;
     const sc = g && g.status !== 'scheduled' && tid ? score(g, tid) : '';
     const seed = m.seeds ? `<span class="seed">${m.seeds[i] <= b.def.seeds.length ? m.seeds[i] : ''}</span>` : '';
-    return `<div class="bteam ${m.winner && m.winner === tid ? 'won' : ''}">${seed}${t ? `<span class="dot" style="background:${esc(t.color)}"></span>${esc(t.name)}`
+    return `<div class="bteam ${m.winner && m.winner === tid ? 'won' : ''}">${seed}${t ? `<span class="dot" style="background:${teamBg(t)}"></span>${esc(t.name)}`
       : `<span class="muted">${m.bye && m.round === 1 ? 'Bye' : 'TBD'}</span>`}<b>${sc}</b></div>`;
   };
   const card = m => {
