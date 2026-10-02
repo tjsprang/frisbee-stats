@@ -291,6 +291,14 @@
   .actions.lineup button.tired.in { box-shadow: inset 0 0 0 2px #eda100; }
   .tired-key { display: block; font-size: 12px; margin-top: 2px; }
 
+  /* Schedule creator: game days and time slots */
+  .weekday-picker { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
+  .weekday-picker button { padding: 7px 9px; font-size: 13px; border-radius: 8px; }
+  .weekday-picker button.on, .cat-tabs button.on { background: var(--text); color: var(--bg); border-color: transparent; }
+  .slot-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+  .slot-chip { display: inline-flex; align-items: center; gap: 2px; background: var(--bg); border: 1px solid var(--line);
+    border-radius: 99px; padding: 4px 6px 4px 10px; font-size: 14px; color: var(--text); font-weight: 600; }
+
   /* Two-colour teams */
   .color2-toggle { display: inline-flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 14px; color: var(--muted); cursor: pointer; }
   .color2-toggle input { width: auto; }
@@ -1894,7 +1902,10 @@ function buildRounds(s) {
 
 function renderSchedule() {
   if (seasonTeams().length < 2 || !canEdit()) { location.hash = '#/games'; return; }
-  sched = sched || { type: 'single', rounds: 8, shuffle: false, start: localDate(new Date()), time: '18:00', every: 7, fields: 1, length: 60 };
+  sched = sched || { type: 'single', rounds: 8, shuffle: false, start: localDate(new Date()), time: '18:00', every: 7, fields: 1, length: 60,
+    dayMode: 'every', days: [3, 5], timeMode: 'start', slots: ['20:00', '21:00', '22:00', '23:00'], balance: true };
+  // A preview from earlier is dropped if its teams have changed since (e.g. one was deleted).
+  if (schedPreview && !schedPreview.every(r => r.games.every(g => team(g.homeId) && team(g.awayId)))) schedPreview = null;
   const n = seasonTeams().length;
   const perRound = n % 2 ? n : n - 1;           // rounds in one full round robin
   const single = n * (n - 1) / 2;               // games in one full round robin
@@ -1920,19 +1931,117 @@ function renderSchedule() {
       <span><b>Shuffle matchups</b><div class="muted">Randomize who plays whom in each round instead of using the team list order.</div></span>
     </label>
 
-    <h2>2. Dates and fields</h2>
-    <div class="card grid2">
-      <label class="field">First game date<input type="date" value="${sched.start}" oninput="sched.start = this.value; schedChanged()"></label>
-      <label class="field">First game time<input type="time" value="${sched.time}" oninput="sched.time = this.value; schedChanged()"></label>
-      <label class="field">Days between rounds<input type="number" min="1" max="60" value="${sched.every}" oninput="sched.every = +this.value; schedChanged()"></label>
-      <label class="field">Fields available<input type="number" min="1" max="20" value="${sched.fields}" oninput="sched.fields = +this.value; schedChanged()"></label>
-      <label class="field">Game length (minutes)<input type="number" min="10" max="300" step="5" value="${sched.length}" oninput="sched.length = +this.value; schedChanged()"></label>
+    <h2>2. Game days</h2>
+    <div class="cat-tabs">
+      <button class="${sched.dayMode === 'every' ? 'on' : ''}" onclick="sched.dayMode = 'every'; schedPreview = null; renderSchedule()">Every few days</button>
+      <button class="${sched.dayMode === 'weekdays' ? 'on' : ''}" onclick="sched.dayMode = 'weekdays'; schedPreview = null; renderSchedule()">Certain days of the week</button>
     </div>
-    <p class="muted">If a round has more games than fields, the extra games start one game length later.</p>
+    <div class="card grid2">
+      <label class="field">${sched.dayMode === 'weekdays' ? 'Season starts' : 'First game date'}<input type="date" value="${sched.start}" oninput="sched.start = this.value; schedChanged()"></label>
+      ${sched.dayMode === 'every'
+        ? `<label class="field">Days between rounds<input type="number" min="1" max="60" value="${sched.every}" oninput="sched.every = +this.value; schedChanged()"></label>`
+        : `<div class="field">Game days<div class="weekday-picker">${WEEKDAYS.map((d, i) => `<button class="${sched.days.includes(i) ? 'on' : ''}"
+            onclick="toggleWeekday(${i})">${d}</button>`).join('')}</div></div>`}
+    </div>
+    ${sched.dayMode === 'weekdays' ? '<p class="muted">Each game day holds one round, in date order from the start date.</p>' : ''}
+
+    <h2>3. Times and fields</h2>
+    <div class="cat-tabs">
+      <button class="${sched.timeMode === 'start' ? 'on' : ''}" onclick="sched.timeMode = 'start'; schedPreview = null; renderSchedule()">Start time + game length</button>
+      <button class="${sched.timeMode === 'slots' ? 'on' : ''}" onclick="sched.timeMode = 'slots'; schedPreview = null; renderSchedule()">Set time slots</button>
+    </div>
+    <div class="card grid2">
+      ${sched.timeMode === 'start' ? `
+        <label class="field">First game time<input type="time" value="${sched.time}" oninput="sched.time = this.value; schedChanged()"></label>
+        <label class="field">Game length (minutes)<input type="number" min="10" max="300" step="5" value="${sched.length}" oninput="sched.length = +this.value; schedChanged()"></label>` : `
+        <div class="field" style="grid-column:1/-1">Time slots
+          <div class="slot-chips">${[...sched.slots].sort().map(t => `<span class="slot-chip">${fmtSlot(t)}
+            <button class="link-btn" onclick="removeSlot('${t}')" aria-label="Remove ${fmtSlot(t)}">✕</button></span>`).join('') || '<span class="muted">No times yet</span>'}</div>
+          <div class="row" style="margin-top:6px"><input type="time" id="new-slot" value="${nextSlot()}"><button class="small" onclick="addSlot()">+ Add time</button></div>
+        </div>`}
+      <label class="field">Fields available<input type="number" min="1" max="20" value="${sched.fields}" oninput="sched.fields = +this.value; schedChanged(); renderSlotNote()"></label>
+    </div>
+    <p class="muted" id="slot-note">${slotNote()}</p>
+    <label class="card option">
+      <input type="checkbox" ${sched.balance ? 'checked' : ''} onchange="sched.balance = this.checked; schedChanged()">
+      <span><b>Spread time slots evenly</b><div class="muted">Rotate teams through the times so nobody always plays the earliest or the latest game.</div></span>
+    </label>
 
     <div class="msg error" id="schedMsg"></div>
     <button class="primary" style="width:100%" onclick="previewSchedule()">Preview schedule</button>
     <div id="preview">${schedPreview ? previewHtml() : ''}</div>`;
+}
+
+// ----- Game days and time slots -----
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const fmtSlot = t => new Date(`2000-01-01T${t}`).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+const gamesPerRound = () => Math.floor(seasonTeams().length / 2);
+function toggleWeekday(i) {
+  sched.days = sched.days.includes(i) ? sched.days.filter(d => d !== i) : [...sched.days, i].sort();
+  schedPreview = null; renderSchedule();
+}
+function addSlot() {
+  const t = document.getElementById('new-slot').value;
+  if (t && !sched.slots.includes(t)) sched.slots = [...sched.slots, t].sort();
+  schedPreview = null; renderSchedule();
+}
+function removeSlot(t) { sched.slots = sched.slots.filter(x => x !== t); schedPreview = null; renderSchedule(); }
+// Suggest the next time on the hour after the latest slot.
+function nextSlot() {
+  const last = [...sched.slots].sort().at(-1);
+  if (!last) return '18:00';
+  const h = (+last.slice(0, 2) + 1) % 24;
+  return `${String(h).padStart(2, '0')}:${last.slice(3)}`;
+}
+// How many games fit on a game day, compared with how many a round needs.
+function slotNote() {
+  const need = gamesPerRound();
+  if (sched.timeMode === 'start') return 'If a round has more games than fields, the extra games start one game length later.';
+  const fit = sched.slots.length * (sched.fields || 0);
+  return fit < need
+    ? `<b style="color:var(--bad)">A game day fits ${fit} game${fit === 1 ? '' : 's'} (${sched.slots.length} time${sched.slots.length === 1 ? '' : 's'} × ${sched.fields} field${sched.fields === 1 ? '' : 's'}), but each round has ${need}. Add a time or a field.</b>`
+    : `A game day fits ${fit} game${fit === 1 ? '' : 's'}; each round has ${need}.${fit > need ? ' Some slots will be empty each day.' : ''}`;
+}
+function renderSlotNote() { const el = document.getElementById('slot-note'); if (el) el.innerHTML = slotNote(); }
+
+// The date of each round: every N days, or the chosen weekdays in order from the start date.
+function roundDates(count, s) {
+  const out = [], d = new Date(`${s.start}T00:00`);
+  if (s.dayMode === 'every') {
+    for (let i = 0; i < count; i++) { const x = new Date(d); x.setDate(d.getDate() + i * s.every); out.push(x); }
+  } else {
+    for (let guard = 0; out.length < count && guard < 3660; guard++) {
+      if (s.days.includes(d.getDay())) out.push(new Date(d));
+      d.setDate(d.getDate() + 1);
+    }
+  }
+  return out;
+}
+
+// Put a round's games into time slots. With balancing on, each game goes where its two teams have played least
+// so far (tried in many orders, keeping the most even), so nobody is always the early or late game.
+function assignSlots(games, slots, fields, counts, balance) {
+  const capacity = () => Object.fromEntries(slots.map(s => [s, fields]));
+  const place = order => {
+    const left = capacity(), out = [];
+    let cost = 0;
+    for (const gi of order) {
+      const [h, a] = games[gi];
+      const options = slots.filter(s => left[s] > 0);
+      const score = s => (counts[h]?.[s] || 0) ** 2 + (counts[a]?.[s] || 0) ** 2;
+      const s = balance ? options.reduce((best, x) => (score(x) < score(best) ? x : best)) : options[0];
+      cost += score(s); left[s]--;
+      out[gi] = { slot: s, field: fields - left[s] };
+    }
+    return { out, cost };
+  };
+  let best = place(games.map((_, i) => i));
+  if (balance) for (let k = 0; k < 80; k++) {
+    const order = shuffled(games.map((_, i) => i)), r = place(order);
+    if (r.cost < best.cost) best = r;
+  }
+  best.out.forEach((p, gi) => { for (const t of games[gi]) { counts[t] = counts[t] || {}; counts[t][p.slot] = (counts[t][p.slot] || 0) + 1; } });
+  return best.out;
 }
 
 // Any settings change makes the current preview out of date.
@@ -1944,23 +2053,44 @@ function schedChanged() {
 
 function previewSchedule() {
   const s = sched, err = t => { document.getElementById('schedMsg').textContent = t; };
-  if (!s.start || !s.time) return err('Pick a date and time for the first game.');
-  if (!(s.every >= 1)) return err('Days between rounds must be at least 1.');
+  if (!s.start) return err('Pick the first game date.');
+  if (s.dayMode === 'every' && !(s.every >= 1)) return err('Days between rounds must be at least 1.');
+  if (s.dayMode === 'weekdays' && !s.days.length) return err('Pick at least one game day.');
   if (!(s.fields >= 1 && s.fields <= 20)) return err('Fields available must be between 1 and 20.');
-  if (!(s.length >= 10)) return err('Game length must be at least 10 minutes.');
+  if (s.timeMode === 'start' && !s.time) return err('Pick a time for the first game.');
+  if (s.timeMode === 'start' && !(s.length >= 10)) return err('Game length must be at least 10 minutes.');
+  if (s.timeMode === 'slots' && !s.slots.length) return err('Add at least one time slot.');
+  if (s.timeMode === 'slots' && s.slots.length * s.fields < gamesPerRound()) return err('A game day doesn’t fit a whole round. Add a time slot or a field.');
   if (s.type === 'rounds' && !(s.rounds >= 1 && s.rounds <= 100)) return err('Number of rounds must be between 1 and 100.');
   err('');
-  schedPreview = buildRounds(s).map((r, ri) => {
-    const day = new Date(`${s.start}T${s.time}`);
-    day.setDate(day.getDate() + ri * s.every);
+  const rounds = buildRounds(s), dates = roundDates(rounds.length, s);
+  // "Start time + game length" is turned into time slots too (start, start + length, …), so both modes can be balanced.
+  const slots = s.timeMode === 'slots' ? [...s.slots].sort() : Array.from({ length: Math.ceil(gamesPerRound() / s.fields) || 1 }, (_, k) => {
+    const [hh, mm] = s.time.split(':').map(Number), t = new Date(2000, 0, 1, hh, mm + k * s.length);
+    return `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`;
+  });
+  // Balancing round by round is greedy, so plan the whole season several times and keep the most even
+  // (smallest gap between a team's most- and least-played time slot, then the smoothest overall).
+  const unevenness = c => {
+    const per = Object.values(c).map(t => slots.map(sl => t[sl] || 0));
+    return [Math.max(0, ...per.map(x => Math.max(...x) - Math.min(...x))), per.flat().reduce((a, x) => a + x * x, 0)];
+  };
+  let plan = null;
+  for (let attempt = 0; attempt < (s.balance ? 40 : 1); attempt++) {
+    const c = {}, placed = rounds.map(r => assignSlots(r.games, slots, s.fields, c, s.balance)), score = unevenness(c);
+    if (!plan || score[0] < plan.score[0] || (score[0] === plan.score[0] && score[1] < plan.score[1])) plan = { placed, score };
+    if (plan.score[0] <= 1) break;   // can't do better than within one game
+  }
+  schedPreview = rounds.map((r, ri) => {
+    const day = dates[ri], placed = plan.placed[ri];
     return {
       bye: r.bye,
       games: r.games.map(([homeId, awayId], gi) => {
-        const t = new Date(day);
-        t.setMinutes(t.getMinutes() + Math.floor(gi / s.fields) * s.length);
-        return { id: uid(), homeId, awayId, status: 'scheduled', round: ri + 1, field: gi % s.fields + 1,
+        const [hh, mm] = placed[gi].slot.split(':').map(Number), t = new Date(day);
+        t.setHours(hh, mm, 0, 0);
+        return { id: uid(), homeId, awayId, status: 'scheduled', round: ri + 1, field: placed[gi].field,
           when: localDateTime(t), created: Date.now(), events: [] };
-      })
+      }).sort((a, b) => a.when.localeCompare(b.when) || a.field - b.field)
     };
   });
   document.getElementById('preview').innerHTML = previewHtml();
@@ -1979,6 +2109,7 @@ function previewHtml() {
     <h2>Preview</h2>
     <div class="card"><b>${schedPreview.length} rounds · ${games.length} games</b>
       <div class="muted">Each team plays ${min === max ? min : `${min}–${max}`} games.</div></div>
+    ${slotBalanceTable(games)}
     ${schedPreview.map((r, i) => `
       <div class="card round">
         <h3><span>Round ${i + 1}</span><span class="muted">${new Date(r.games[0]?.when || Date.now()).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })}</span></h3>
@@ -1993,6 +2124,24 @@ function previewHtml() {
         <button class="primary" onclick="saveSchedule(true)">Replace current (${existing} games)</button>`
         : '<button class="primary" onclick="saveSchedule(false)">Save schedule</button>'}
     </div>`;
+}
+
+// How many times each team plays in each time slot, so admins can see it's fair.
+function slotBalanceTable(games) {
+  const times = [...new Set(games.map(g => g.when.slice(11)))].sort();
+  if (times.length < 2) return '';
+  const count = (tid, t) => games.filter(g => (g.homeId === tid || g.awayId === tid) && g.when.slice(11) === t).length;
+  const rows = seasonTeams().map(tm => ({ tm, c: times.map(t => count(tm.id, t)) }));
+  const spread = Math.max(...rows.map(r => Math.max(...r.c) - Math.min(...r.c)));
+  return `<div class="card">
+    <div class="chart-title">Games per time slot</div>
+    <div class="muted" style="font-size:13px;margin-bottom:6px">${spread <= 1 ? '✓ Every team plays each time slot about the same number of times.'
+      : `Some teams play one time slot up to ${spread} more times than another.`}</div>
+    <div class="table-wrap"><table>
+      <thead><tr><th class="l">Team</th>${times.map(t => `<th>${fmtSlot(t)}</th>`).join('')}</tr></thead>
+      <tbody>${rows.map(r => `<tr><td class="l"><span class="dot" style="background:${teamBg(r.tm)}"></span>${esc(r.tm.name)}</td>
+        ${r.c.map(n => `<td>${n}</td>`).join('')}</tr>`).join('')}</tbody>
+    </table></div></div>`;
 }
 
 function saveSchedule(replace) {
