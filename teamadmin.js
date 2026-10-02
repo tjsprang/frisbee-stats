@@ -72,7 +72,7 @@ async function renderTeamRequest(leagueId) {
   const { data: season } = await sb.from('seasons').select('id, name').eq('league_id', leagueId).eq('status', 'active').maybeSingle();
   const { data: teams } = season ? await sb.from('teams').select('id, name, color').eq('season_id', season.id).order('name') : { data: [] };
   if (!location.hash.startsWith('#/teamadmin/')) return;
-  if (teamForm?.leagueId !== leagueId) teamForm = { leagueId, name: '', color: '#3b82f6', rosterText: '' };
+  if (teamForm?.leagueId !== leagueId) teamForm = { leagueId, name: '', color: '#3b82f6', color2: null, rosterText: '' };
   const roster = parseRoster(teamForm.rosterText);
   app.innerHTML = `
     <div class="row"><h1>${esc(l?.name || 'League')}</h1><a class="btn small" href="#/teamadmin">← Back</a></div>
@@ -82,8 +82,12 @@ async function renderTeamRequest(leagueId) {
     <div class="card">
       <div class="row">
         <input id="tr-name" placeholder="Team name" maxlength="60" value="${esc(teamForm.name)}" oninput="teamForm.name = this.value">
-        <input type="color" value="${esc(teamForm.color)}" oninput="teamForm.color = this.value">
+        <input type="color" value="${esc(teamForm.color)}" oninput="teamForm.color = this.value; previewRequestColor()" aria-label="Main colour">
+        ${teamForm.color2 ? `<input type="color" value="${esc(teamForm.color2)}" oninput="teamForm.color2 = this.value; previewRequestColor()" aria-label="Second colour">` : ''}
       </div>
+      <label class="color2-toggle">
+        <input type="checkbox" ${teamForm.color2 ? 'checked' : ''} onchange="teamForm.color2 = this.checked ? (teamForm.color2 || '#ffffff') : null; renderTeamRequest('${leagueId}')">
+        Two colours <span class="dot big-dot" id="request-color-preview" style="background:${teamBg(teamForm)}"></span></label>
       <label class="field" style="margin-top:12px">Roster: one player per line, with their number first if you like
         <textarea id="tr-roster" rows="8" placeholder="12 Jordan Smith&#10;7 Sam Lee&#10;Casey Brown" oninput="teamForm.rosterText = this.value; updateRosterCount()">${esc(teamForm.rosterText)}</textarea></label>
       <div class="muted" id="roster-count" style="font-size:13px;margin-top:4px">${roster.length} player${roster.length === 1 ? '' : 's'}</div>
@@ -106,6 +110,11 @@ function parseRoster(text) {
     return { number: '', name: line };
   }).filter(p => p.name).map(p => ({ ...p, name: p.name.slice(0, 60) }));
 }
+function previewRequestColor() {
+  const el = document.getElementById('request-color-preview');
+  if (el) el.style.background = teamBg(teamForm);
+}
+
 function updateRosterCount() {
   const n = parseRoster(teamForm.rosterText).length;
   document.getElementById('roster-count').textContent = `${n} player${n === 1 ? '' : 's'}`;
@@ -115,8 +124,10 @@ async function submitNewTeam() {
   const msg = document.getElementById('tr-msg');
   const roster = parseRoster(teamForm.rosterText);
   if (!teamForm.name.trim()) return (msg.textContent = 'Give your team a name.');
-  const { error } = await sb.rpc('submit_team_request', { p_league_id: teamForm.leagueId, p_kind: 'new', p_team_id: null,
-    p_name: teamForm.name.trim(), p_color: teamForm.color, p_roster: roster });
+  const args = { p_league_id: teamForm.leagueId, p_kind: 'new', p_team_id: null, p_name: teamForm.name.trim(), p_color: teamForm.color, p_roster: roster };
+  let { error } = await sb.rpc('submit_team_request', { ...args, p_color2: teamForm.color2 || null });
+  // Before supabase/014 the function has no second-colour option: send it without (the team admin can add it later).
+  if (error && /schema cache|does not exist|function/i.test(error.message) && !error.message.includes('already')) ({ error } = await sb.rpc('submit_team_request', args));
   if (error) return (msg.textContent = dbErrorText(error));
   toast(`Sent! A league admin will review ${teamForm.name.trim()}. You’ll see it under Your teams once it’s approved.`);
   teamForm = null; location.hash = '#/teamadmin';
