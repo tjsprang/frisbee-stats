@@ -62,12 +62,13 @@ async function cancelTeamRequest(id) {
 // ---------- Registering a team, or asking to manage one ----------
 let teamForm = null;   // { leagueId, name, color, rosterText }
 async function renderTeamRequest(leagueId) {
-  // The league's name comes from the search results, or is looked up (e.g. after a reload).
-  if (!leagueCache[leagueId]) {
-    const { data } = await sb.from('leagues').select('id, name, border_colors').eq('id', leagueId).maybeSingle();
+  // Look the league up for its name and minimum roster size (search results don't include the minimum).
+  if (leagueCache[leagueId]?.min_roster === undefined) {
+    const { data } = await sb.from('leagues').select('*').eq('id', leagueId).maybeSingle();
     if (data) leagueCache[leagueId] = data;
   }
   const l = leagueCache[leagueId];
+  teamMin = l?.min_roster || 0;
   app.innerHTML = `<h1>${esc(l?.name || 'League')}</h1><p class="muted">Loading teams…</p>`;
   const { data: season } = await sb.from('seasons').select('id, name').eq('league_id', leagueId).eq('status', 'active').maybeSingle();
   const { data: teams } = season ? await sb.from('teams').select('id, name, color').eq('season_id', season.id).order('name') : { data: [] };
@@ -88,9 +89,10 @@ async function renderTeamRequest(leagueId) {
       <label class="color2-toggle">
         <input type="checkbox" ${teamForm.color2 ? 'checked' : ''} onchange="teamForm.color2 = this.checked ? (teamForm.color2 || '#ffffff') : null; renderTeamRequest('${leagueId}')">
         Two colours <span class="dot big-dot" id="request-color-preview" style="background:${teamBg(teamForm)}"></span></label>
+      ${teamMin ? `<p class="muted" style="margin:10px 0 0">This league needs at least <b>${teamMin} players</b> on a team’s roster.</p>` : ''}
       <label class="field" style="margin-top:12px">Roster: one player per line, with their number first if you like
         <textarea id="tr-roster" rows="8" placeholder="12 Jordan Smith&#10;7 Sam Lee&#10;Casey Brown" oninput="teamForm.rosterText = this.value; updateRosterCount()">${esc(teamForm.rosterText)}</textarea></label>
-      <div class="muted" id="roster-count" style="font-size:13px;margin-top:4px">${roster.length} player${roster.length === 1 ? '' : 's'}</div>
+      <div class="muted" id="roster-count" style="font-size:13px;margin-top:4px">${rosterCountText(roster.length)}</div>
       <div class="msg error" id="tr-msg"></div>
       <button class="primary" style="width:100%;margin-top:10px" onclick="submitNewTeam()">Send to the league admins</button>
     </div>
@@ -115,15 +117,18 @@ function previewRequestColor() {
   if (el) el.style.background = teamBg(teamForm);
 }
 
+let teamMin = 0;   // the league's minimum roster size (0 = none)
+const rosterCountText = n => `${n} player${n === 1 ? '' : 's'}${teamMin
+  ? (n >= teamMin ? ' ✓' : ` · <b style="color:var(--bad)">${teamMin - n} more needed</b>`) : ''}`;
 function updateRosterCount() {
-  const n = parseRoster(teamForm.rosterText).length;
-  document.getElementById('roster-count').textContent = `${n} player${n === 1 ? '' : 's'}`;
+  document.getElementById('roster-count').innerHTML = rosterCountText(parseRoster(teamForm.rosterText).length);
 }
 
 async function submitNewTeam() {
   const msg = document.getElementById('tr-msg');
   const roster = parseRoster(teamForm.rosterText);
   if (!teamForm.name.trim()) return (msg.textContent = 'Give your team a name.');
+  if (roster.length < teamMin) return (msg.textContent = `This league needs at least ${teamMin} players on a roster. Add ${teamMin - roster.length} more.`);
   const args = { p_league_id: teamForm.leagueId, p_kind: 'new', p_team_id: null, p_name: teamForm.name.trim(), p_color: teamForm.color, p_roster: roster };
   let { error } = await sb.rpc('submit_team_request', { ...args, p_color2: teamForm.color2 || null });
   // Before supabase/014 the function has no second-colour option: send it without (the team admin can add it later).

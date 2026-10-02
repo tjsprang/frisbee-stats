@@ -549,7 +549,8 @@ async function fetchLeague(id, alsoSeasons = []) {
     teams: teams.map(t => ({ id: t.id, name: t.name, color: t.color, color2: t.color2 || null, seasonId: t.season_id, players: [] })),
     color2Ready: !color2Probe.error,   // false until supabase/013_team_colors.sql has been run
     games: games.map(toGame),
-    settings: { onField: lg.on_field, timeCap: lg.time_cap ?? null },
+    settings: { onField: lg.on_field, timeCap: lg.time_cap ?? null, minRoster: lg.min_roster ?? 0 },
+    minRosterReady: 'min_roster' in lg,   // false until supabase/015_min_roster.sql has been run
     createdBy: lg.created_by,
     detailsReady: 'time_cap' in lg,   // false until supabase/009_game_details.sql has been run
     publicReady: 'is_public' in lg,   // false until supabase/010 has been run (and the next two)
@@ -1310,6 +1311,9 @@ function renderCreateLeague() {
         <input id="ln" placeholder="League name" maxlength="60" minlength="2" required autocomplete="off">
         <input id="lpw" type="password" placeholder="League password (4+ characters)" minlength="4" required autocomplete="new-password">
         <input id="lpw2" type="password" placeholder="Confirm league password" minlength="4" required autocomplete="new-password">
+        <label class="field">Minimum players per team
+          <input id="lmin" type="number" min="0" max="60" value="7" inputmode="numeric">
+          <span class="muted" style="font-size:12px">Teams registered by team admins need at least this many players. Use 0 for no minimum. You can change it later in Settings.</span></label>
         <button class="primary" id="createBtn">Create league</button>
       </form>
       <div id="authMsg" class="msg"></div>
@@ -1322,8 +1326,12 @@ async function createLeague(ev) {
   ev.preventDefault();
   const pw = document.getElementById('lpw').value;
   if (pw !== document.getElementById('lpw2').value) return authMsg('The passwords don’t match.', true);
+  const min = Math.max(0, Math.min(60, parseInt(document.getElementById('lmin').value, 10) || 0));
   const btn = document.getElementById('createBtn'); btn.disabled = true;
-  const { data, error } = await sb.rpc('create_league', { p_name: document.getElementById('ln').value, p_password: pw });
+  const args = { p_name: document.getElementById('ln').value, p_password: pw };
+  let { data, error } = await sb.rpc('create_league', { ...args, p_min_roster: min });
+  // Before supabase/015 there's no minimum-roster option: create the league without it.
+  if (error && /schema cache|function/i.test(error.message) && !/already exists|must be/i.test(error.message)) ({ data, error } = await sb.rpc('create_league', args));
   btn.disabled = false;
   if (error) return authMsg(dbErrorText(error), true);
   enterLeague(data, 'admin');
@@ -1636,6 +1644,16 @@ function renderSettings() {
       </div>
     </div>
 
+    ${db.minRosterReady ? `<h2>Minimum roster</h2>
+    <div class="card">
+      <div class="muted">Teams registered by team admins need at least this many players. Teams you add yourself aren’t affected.</div>
+      <div class="stepper">
+        <button onclick="setMinRoster(-1)" aria-label="Fewer players" ${db.settings.minRoster <= 0 ? 'disabled' : ''}>−</button>
+        <b>${db.settings.minRoster || 'None'}</b>
+        <button onclick="setMinRoster(1)" aria-label="More players" ${db.settings.minRoster >= 60 ? 'disabled' : ''}>+</button>
+      </div>
+    </div>` : ''}
+
     ${db.detailsReady ? `<h2>Game time cap</h2>
     <div class="card">
       <div class="muted">Optional. The game clock counts down to it during games, starting from the first pull.</div>
@@ -1795,6 +1813,13 @@ function setOnField(delta) {
   db.settings = { ...db.settings, onField: n };
   const leagueId = league.id;
   persist({ rpc: 'set_league_on_field', args: { p_league_id: leagueId, p_on_field: n } });
+  renderSettings();
+}
+
+function setMinRoster(delta) {
+  const n = Math.max(0, Math.min(60, (db.settings.minRoster || 0) + delta));
+  db.settings = { ...db.settings, minRoster: n };
+  persist({ rpc: 'set_league_min_roster', args: { p_league_id: league.id, p_min: n } });
   renderSettings();
 }
 
