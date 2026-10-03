@@ -13,12 +13,13 @@ Live stat tracking for ultimate frisbee leagues. It's a static page (`index.html
 - Team pages (record, point spread, offensive productivity, conversion rate, holds and breaks, passes per possession, points per line, assists-to-goals flow), game pages (score chart, point-by-point), and player pages
 - Public read-only links, player photos and bios, game availability (In / Maybe / Out), and CSV export
 - Standings, playoff brackets seeded from the standings, in-app notifications, and an installable app that works offline
-- Schedule creator (round robins or a set number of rounds, with fields and times)
+- Schedule creator (round robins or a set number of rounds, on chosen weekdays, with time slots spread fairly)
+- Practice scrimmages: split a team into Dark and Light sides and track them live, with practice stats kept apart from league stats and visible only to that team
 - Live updates on every device, and a save queue that keeps working through spotty signal
 
 ## Setup
 
-1. Create a Supabase project. In the SQL Editor, run the scripts in `supabase/` in order (`001` through `015`).
+1. Create a Supabase project. In the SQL Editor, run the scripts in `supabase/` in order (`001` through `016`).
 2. Put your project URL and publishable (anon) key into `SUPABASE_URL` and `SUPABASE_KEY` near the top of the script in `index.html`.
 3. In Supabase, go to **Authentication → URL Configuration**. Set the **Site URL** to where the app is hosted, and add it under **Redirect URLs**.
 4. Host the folder anywhere static over https, for example GitHub Pages (the service worker needs https).

@@ -9,11 +9,13 @@
     --bg: #f4f5f7; --card: #ffffff; --text: #16181d; --muted: #6b7280;
     --line: #e3e5ea; --accent: #ff6a1a; --accent-text: #ffffff;
     --good: #16a34a; --bad: #dc2626; --d: #2563eb;
+    --side-dark: #3f3f46; --side-light: #a1a1aa;   /* practice scrimmage sides */
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #0f1115; --card: #1a1d24; --text: #eef0f4; --muted: #9aa1ad;
       --line: #2a2f39; --accent: #ff7a2e;
+      --side-dark: #8b8b96; --side-light: #e4e4e7;
     }
   }
   * { box-sizing: border-box; }
@@ -368,6 +370,19 @@
 
   /* Leaders: All / Teams */
   .leader-tabs button.on { background: var(--accent); color: var(--accent-text); border-color: transparent; }
+  /* Practice scrimmages: choosing sides */
+  .side-summary { gap: 14px; margin: 10px 0 4px; flex-wrap: wrap; }
+  .side-summary button { margin-left: auto; }
+  .side-list { max-height: 50vh; overflow-y: auto; }
+  .side-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+  .side-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .side-pick { display: flex; gap: 4px; flex: 0 0 auto; }
+  .side-pick button { padding: 6px 10px; font-size: 13px; }
+  .side-pick button.on.dark { background: var(--side-dark); color: var(--card); border-color: transparent; }
+  .side-pick button.on.light { background: var(--side-light); color: #111; border-color: transparent; }
+  .side-pick button.on.out { background: var(--line); }
+  .side-pick button.on { font-weight: 800; box-shadow: 0 0 0 2px var(--accent); }
+  .practice-label { font-size: 13px; margin-bottom: 8px; }
   .team-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
   .team-chips button { padding: 8px 12px; font-size: 14px; border-radius: 99px; white-space: nowrap; }
   .team-chips button.on { border: 2px solid var(--c); background: color-mix(in srgb, var(--c) 18%, var(--card)); }
@@ -392,6 +407,7 @@
 <script src="league.js"></script>
 <script src="extras.js"></script>
 <script src="teamadmin.js"></script>
+<script src="practice.js"></script>
 <link rel="manifest" href="manifest.webmanifest">
 <meta name="theme-color" content="#0f1115">
 <link rel="apple-touch-icon" href="icon-180.png">
@@ -460,7 +476,7 @@ function seed() {
 }
 
 const emptyDb = () => ({ teams: [], games: [], settings: { onField: 7 }, claims: [], claimsReady: false, passReady: false,
-  seasonsReady: false, seasons: [], hof: [], profiles: {}, avail: [] });
+  seasonsReady: false, seasons: [], hof: [], profiles: {}, avail: [], practice: [] });
 let db = emptyDb();
 let dataLeagueId = null;   // which league `db` currently holds
 let loading = null, loadError = null, channel = null;
@@ -478,7 +494,8 @@ const toGame = r => ({
   id: r.id, homeId: r.home_id, awayId: r.away_id, status: r.status, created: Number(r.created_ms),
   when: r.scheduled_at, field: r.field, round: r.round, lineup: r.lineup, pointPlayers: r.point_players,
   firstPull: r.first_pull || null, seasonId: r.season_id || null,
-  stage: r.stage || 'regular', bracketSlot: r.bracket_slot || null, wind: r.wind || null, events: []
+  stage: r.stage || 'regular', bracketSlot: r.bracket_slot || null, wind: r.wind || null,
+  practiceTeam: r.practice_team || null, sides: r.sides || null, events: []
 });
 const toEvent = r => ({
   id: r.id, t: Number(r.t), type: r.type, teamId: r.team_id, playerId: r.player_id,
@@ -501,6 +518,7 @@ const gameRow = g => ({
   lineup: g.lineup || null, point_players: g.pointPlayers || null, ...seasonCols(g),
   ...(db.playoffsReady ? { stage: g.stage || 'regular', bracket_slot: g.bracketSlot || null } : {}),   // columns added by 008
   ...(db.detailsReady ? { wind: g.wind || null } : {}),                                                // column added by 009
+  ...(db.practiceReady ? { practice_team: g.practiceTeam || null, sides: g.sides || null } : {}),       // columns added by 016
   ...(db.passReady ? { first_pull: g.firstPull || null } : {})   // column added by supabase/005
 });
 const eventRow = (g, e) => ({
@@ -537,7 +555,7 @@ async function fetchLeague(id, alsoSeasons = []) {
   const seasons = await sb.from('seasons').select('*').eq('league_id', id).order('number');   // fails until supabase/006
   const active = seasons.data?.find(s => s.status === 'active');
   const loadIds = !seasons.error && active ? [...new Set([active.id, ...alsoSeasons])] : null;   // null = everything
-  const [lg, teams, players, [games, events], passProbe, hof, playoffProbe, profiles, avail, teamAdmins, teamRequests, color2Probe] = await Promise.all([
+  const [lg, teams, players, [games, events], passProbe, hof, playoffProbe, profiles, avail, teamAdmins, teamRequests, color2Probe, practiceProbe] = await Promise.all([
     sb.from('leagues').select('*').eq('id', id).single()   // '*' so columns added by later updates are optional
       .then(r => { if (r.error) throw r.error; return r.data; }),
     fetchAll('teams', id, ['created_at', 'id']),
@@ -550,13 +568,17 @@ async function fetchLeague(id, alsoSeasons = []) {
     sb.from('availability').select('*').eq('league_id', id),
     sb.from('team_admins').select('*').eq('league_id', id),   // these two fail until supabase/012
     sb.from('team_requests').select('*').eq('league_id', id).order('created_at'),
-    sb.from('teams').select('color2').limit(1)   // fails until supabase/013 has been run
+    sb.from('teams').select('color2').limit(1),   // fails until supabase/013 has been run
+    sb.from('games').select('practice_team').limit(1)   // fails until supabase/016 has been run
   ]);
   const claims = await fetchClaims(id);
   const next = {
     teams: teams.map(t => ({ id: t.id, name: t.name, color: t.color, color2: t.color2 || null, seasonId: t.season_id, players: [] })),
     color2Ready: !color2Probe.error,   // false until supabase/013_team_colors.sql has been run
-    games: games.map(toGame),
+    // Practice scrimmages are kept apart from league games, so they never reach standings or league stats.
+    games: games.filter(r => r.stage !== 'practice').map(toGame),
+    practice: games.filter(r => r.stage === 'practice').map(toGame),
+    practiceReady: !practiceProbe.error,   // false until supabase/016_practice.sql has been run
     settings: { onField: lg.on_field, timeCap: lg.time_cap ?? null, minRoster: lg.min_roster ?? 0 },
     minRosterReady: 'min_roster' in lg,   // false until supabase/015_min_roster.sql has been run
     createdBy: lg.created_by,
@@ -582,7 +604,7 @@ async function fetchLeague(id, alsoSeasons = []) {
   for (const p of players) next.teams.find(t => t.id === p.team_id)?.players.push({
     id: p.id, name: p.name, number: p.number, userId: p.user_id || null, personId: p.person_id || p.id
   });
-  const byId = Object.fromEntries(next.games.map(g => [g.id, g]));
+  const byId = Object.fromEntries([...next.games, ...next.practice].map(g => [g.id, g]));
   for (const e of events) byId[e.game_id]?.events.push(toEvent(e));
   if (league?.id === id) { league.name = lg.name; league.border_colors = lg.border_colors; rememberLeague(); }
   return next;
@@ -663,7 +685,7 @@ function loadLeague() {
       // No signal: fall back to the copy saved on this device, if there is one.
       const snap = !err.code && await loadSnapshot(id);
       if (snap && league?.id === id) {
-        db = snap.data; dataLeagueId = id; loadError = null; offlineData = snap.at;
+        db = { practice: [], ...snap.data }; dataLeagueId = id;   // copies saved before practices existed have none loadError = null; offlineData = snap.at;
         subscribeLeague(id);   // connects by itself once the signal is back
       } else loadError = dbErrorText(err);
     })
@@ -679,7 +701,7 @@ function seasonsNeeded(page, id) {
   const all = db.seasons.map(s => s.id);
   const need = page === 'hof' || page === 'profile' || (page === 'leaders' && leaderScope === 'all')
     || ((page === 'box' || page === 'game') && !game(id)) ? all
-    : page === 'team' ? [team(id)?.seasonId]
+    : page === 'team' || page === 'practice' ? [team(id)?.seasonId]
     : [viewSeason()?.id];
   return need.filter(s => s && !db.loadedSeasons.includes(s));
 }
@@ -690,7 +712,8 @@ function loadSeasons(ids) {
     .then(([games, events]) => {
       const fresh = games.map(toGame), byId = Object.fromEntries(fresh.map(g => [g.id, g]));
       for (const e of events) byId[e.game_id]?.events.push(toEvent(e));
-      db.games = [...db.games.filter(g => !ids.includes(g.seasonId)), ...fresh];
+      db.games = [...db.games.filter(g => !ids.includes(g.seasonId)), ...fresh.filter(g => !isPractice(g))];
+      db.practice = [...db.practice.filter(g => !ids.includes(g.seasonId)), ...fresh.filter(isPractice)];
       db.loadedSeasons = [...new Set([...db.loadedSeasons, ...ids])];
       saveSnapshot(league.id, db);
     })
@@ -915,11 +938,11 @@ function remoteGame(r) {
     const was = g.status;
     Object.assign(g, next, { events: g.events });
     // Someone else started or finished a game.
-    const h = team(g.homeId), a = team(g.awayId);
+    const h = !isPractice(g) && team(g.homeId), a = team(g.awayId);   // no alerts for practices
     if (h && a && was !== 'live' && g.status === 'live') notify(`🟢 Live now: ${h.name} vs ${a.name}`, `#/box/${g.id}`);
     if (h && a && was === 'live' && g.status === 'final') notify(`🏁 Final: ${h.name} ${score(g, h.id)}–${score(g, a.id)} ${a.name}`, `#/box/${g.id}`);
   } else {
-    db.games.push(next);
+    (isPractice(next) ? db.practice : db.games).push(next);
   }
   rerender();
 }
@@ -938,8 +961,9 @@ function remoteDelete(kind, id) {
   if (kind === 'game') {
     if (!game(id)) return;
     db.games = db.games.filter(g => g.id !== id);
+    db.practice = db.practice.filter(g => g.id !== id);
   } else {
-    const g = db.games.find(g => g.events.some(e => e.id === id));
+    const g = [...db.games, ...db.practice].find(g => g.events.some(e => e.id === id));
     if (!g) return;
     g.events = g.events.filter(e => e.id !== id);
   }
@@ -981,10 +1005,11 @@ async function uploadLegacy(btn) {
   dataLeagueId = null; route();
 }
 
-const team = id => db.teams.find(t => t.id === id);
+// Practice sides ("<gameId>:dark") aren't real teams; practiceSide() in practice.js builds them from the game.
+const team = id => db.teams.find(t => t.id === id) || practiceSide(id);
 // A team's colour as a CSS background: solid, or split diagonally when it has a second colour.
 const teamBg = t => (t?.color2 ? `linear-gradient(135deg, ${t.color} 50%, ${t.color2} 50%)` : t?.color || '#888');
-const game = id => db.games.find(g => g.id === id);
+const game = id => db.games.find(g => g.id === id) || db.practice.find(g => g.id === id);
 function player(id) {
   for (const t of db.teams) { const p = t.players.find(p => p.id === id); if (p) return p; }
   return { id, name: '(removed)', number: '' };
@@ -1022,14 +1047,14 @@ function route() {
   if (page === 'view' && id) return enterPublic(id);   // a public link: no account needed
   document.body.classList.toggle('public', isPublicView());
   if (!session && !isPublicView()) return renderLogin();
-  const inLeague = !!(league && mode) && ['games', 'game', 'box', 'leaders', 'teams', 'schedule', 'settings', 'profile', 'team', 'hof', 'standings', 'playoffs'].includes(page);
+  const inLeague = !!(league && mode) && ['games', 'game', 'box', 'leaders', 'teams', 'schedule', 'settings', 'profile', 'team', 'practice', 'hof', 'standings', 'playoffs'].includes(page);
   updateBell();
   document.body.classList.toggle('no-nav', !inLeague);
   document.body.classList.toggle('player', !isAdmin());
   document.getElementById('modeTag').textContent = inLeague ? (isAdmin() ? 'Admin' : isTeamMode() ? 'Team admin' : isPublicView() ? 'Public' : 'Player') : '';
   document.querySelectorAll('[data-nav]').forEach(a =>
     a.classList.toggle('on', (a.dataset.nav === 'games' && ['games', 'game', 'box', 'schedule', 'settings'].includes(page))
-      || (a.dataset.nav === 'teams' && (page === 'profile' || page === 'team'))
+      || (a.dataset.nav === 'teams' && ['profile', 'team', 'practice'].includes(page))
       || (a.dataset.nav === 'leaders' && page === 'hof') || (a.dataset.nav === 'standings' && page === 'playoffs')
       || a.dataset.nav === page));
   if (page === 'admin') return id === 'create' ? renderCreateLeague() : renderAdminHome();
@@ -1061,6 +1086,7 @@ function route() {
   if (page === 'teams') return isAdmin() || (isTeamMode() && db.teamAdminsReady) ? renderTeams() : renderRosters();
   if (page === 'profile') return renderProfile(id);
   if (page === 'team') return renderTeamPage(id);
+  if (page === 'practice') return renderTeamPage(id, 'practice');
   if (page === 'hof') return renderHallOfFame();
   if (page === 'standings') return renderStandings();
   if (page === 'playoffs') return renderPlayoffs();
@@ -1355,7 +1381,7 @@ function gameCard(g) {
   const info = `<div>
       <div><span class="dot" style="background:${teamBg(h)}"></span>${esc(h.name)} ${upcoming ? '' : `<b>${score(g, h.id)}</b>`}</div>
       <div><span class="dot" style="background:${teamBg(a)}"></span>${esc(a.name)} ${upcoming ? '' : `<b>${score(g, a.id)}</b>`}</div>
-      <div class="muted">${g.stage === 'playoff' ? `🏆 Playoffs · ${roundName(g.round, Math.log2(db.seasons.find(s => s.id === g.seasonId)?.playoffs?.size || 2))}${upcoming ? '' : ' · '}` : ''}${upcoming
+      <div class="muted">${isPractice(g) ? '🏃 Practice · ' : ''}${g.stage === 'playoff' ? `🏆 Playoffs · ${roundName(g.round, Math.log2(db.seasons.find(s => s.id === g.seasonId)?.playoffs?.size || 2))}${upcoming ? '' : ' · '}` : ''}${upcoming
         ? (g.stage === 'playoff' ? '' : `${fmtWhen(g.when)} · Field ${g.field} · Round ${g.round}`) : new Date(g.created).toLocaleDateString()}</div>
     </div>`;
   if (upcoming) return `<div class="card"><div class="game-link">${info}${canTrack(g)
@@ -1409,6 +1435,7 @@ function renderGames() {
           <select id="away">${others.map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join('')}</select>
         </div>
         <button class="primary" style="width:100%;margin-top:10px" onclick="newGame()">Start tracking</button>
+        ${db.practiceReady ? mine.map(t => `<a class="btn" style="display:block;margin-top:8px;text-align:center" href="#/practice/${t.id}">🏃 ${esc(t.name)} practice</a>`).join('') : ''}
       </div>`;
     })() : ''}
     ${edit && teams.length < 2 ? `<div class="card">
@@ -1614,6 +1641,8 @@ function renderProfile(pid) {
     ${hof ? `<a class="card hof-banner" href="#/hof">🏆 Hall of Fame${hof.note ? ` · “${esc(hof.note)}”` : ''}</a>` : ''}
     <p class="muted"><a href="#/team/${t.id}" style="color:inherit"><span class="dot" style="background:${teamBg(t)}"></span>${esc(t.name)}</a>
       ${db.seasonsReady ? `· ${esc(seasonName(t.seasonId))}` : ''} · ${played.length} game${played.length === 1 ? '' : 's'}</p>
+    ${profileTabs(p, t)}
+    ${showingPracticeProfile(p, t) ? practiceProfileHtml(p, t) : `
     ${allTime}
     ${allTime ? `<h2 style="margin-top:26px">${esc(seasonName(t.seasonId))}</h2>` : ''}
     <h2>Offense</h2>
@@ -1633,7 +1662,7 @@ function renderProfile(pid) {
     ${rows.length ? `${statCatTabs('route()')}<div class="card">${statTable(rows, statCols(
       { k: 'name', h: 'Game', l: true, f: r => `<a href="#/box/${r.gm.id}">vs ${esc(r.opp.name)}</a>
         <div class="muted" style="font-size:12px">${esc(r.result)} · ${new Date(r.gm.created).toLocaleDateString()}</div>` }))}</div>
-      ${statFootnote}` : '<p class="muted">No games played yet.</p>'}`;
+      ${statFootnote}` : '<p class="muted">No games played yet.</p>'}`}`;
 }
 
 // ---------- League settings ----------
@@ -2300,6 +2329,7 @@ function renderTracker(g) {
   }
 
   app.innerHTML = `
+    ${isPractice(g) ? practiceLabel(g) : ''}
     <div class="card scoreboard">
       <div class="team" style="color:${h.color}">${esc(h.name)}</div>
       <div>
@@ -2321,9 +2351,10 @@ function renderTracker(g) {
       ${!half && st.phase === 'pull' && st.point > 1 ? '<button onclick="halftime()">Halftime</button>' : ''}
       <button class="primary" onclick="endGame()">End game</button>
     </div>
-    ${db.detailsReady ? `<div class="row" style="margin-top:10px">
-      <button onclick="timeoutSheet()">⏸ Timeout</button>
-      <button onclick="windSheet()">🌬 Wind</button>
+    ${db.detailsReady || isPractice(g) ? `<div class="row" style="margin-top:10px">
+      ${isPractice(g) ? '<button onclick="editSides()">⇄ Sides</button>' : ''}
+      ${db.detailsReady ? `<button onclick="timeoutSheet()">⏸ Timeout</button>
+      <button onclick="windSheet()">🌬 Wind</button>` : ''}
     </div>` : ''}`;
   tickClocks();
 }
@@ -2766,6 +2797,7 @@ function renderBox(g) {
     ${scoreChart(r)}
     <p class="muted">Player stats aren’t kept for playoff games this season (chosen when the playoffs were set up). The score and play-by-play are still here.</p>` : `
     ${isPlayoff(g) && !countsInSeason(g) ? '<p class="muted">🏆 Playoff game: these stats count toward playoff stats, not the regular season.</p>' : ''}
+    ${isPractice(g) ? `<p class="muted">🏃 These stats count toward <a href="#/practice/${g.practiceTeam}">practice stats</a> only.</p>` : ''}
     ${leaders.length ? `<div class="card"><div class="chart-title">Game leaders</div>
       <div class="leaders-list">${leaders.map(([l, v]) => `<div><span class="muted">${l}</span><b>${esc(v)}</b></div>`).join('')}</div></div>` : ''}
     ${scoreChart(r)}
@@ -2791,6 +2823,7 @@ function renderBox(g) {
   }).join('')}</div>` : '<p class="muted">No points played yet.</p>';
 
   app.innerHTML = `
+    ${isPractice(g) ? practiceLabel(g) : ''}
     ${live ? `
     <div class="card scoreboard live-board">
       <div class="team" style="color:${h.color}">${esc(h.name)}</div>
@@ -2825,16 +2858,18 @@ function renderBox(g) {
       ${g.status === 'live'
         ? `<a class="btn primary" href="#/game/${g.id}">Back to tracking</a>`
         : `<button onclick="reopen('${g.id}')">Reopen game</button>`}
-      ${isAdmin() ? `<button onclick="deleteGame('${g.id}')">Delete game</button>` : ''}
+      ${isAdmin() || isPractice(g) ? `<button onclick="deleteGame('${g.id}')">Delete ${isPractice(g) ? 'scrimmage' : 'game'}</button>` : ''}
     </div>` : ''}`;
 }
 
 function reopen(id) { const g = game(id); g.status = 'live'; saveGame(g); location.hash = `#/game/${id}`; }
 function deleteGame(id) {
   if (!confirm('Delete this game and all its stats? This cannot be undone.')) return;
+  const practiceTeam = game(id)?.practiceTeam;
   db.games = db.games.filter(g => g.id !== id);
+  db.practice = db.practice.filter(g => g.id !== id);
   persist({ del: 'games', vals: [id] });
-  location.hash = '#/games';
+  location.hash = practiceTeam ? `#/practice/${practiceTeam}` : '#/games';
 }
 
 // ---------- Leaderboard ----------
@@ -2987,9 +3022,18 @@ function removeFromHof(id) {
 let teamSort = 'pm';
 function sortTeam(k) { teamSort = k; route(); }
 
-function renderTeamPage(tid) {
-  const t = team(tid);
+function renderTeamPage(tid, tab = 'season') {
+  const t = db.teams.find(x => x.id === tid);
   if (!t) { location.hash = '#/teams'; return; }
+  if (tab === 'practice') {   // practice scrimmages (practice.js)
+    if (!canSeePractice(tid)) { location.hash = `#/team/${tid}`; return; }
+    app.innerHTML = `
+      <div class="row"><h1><span class="dot" style="background:${teamBg(t)}"></span>${esc(t.name)}</h1>
+        <a class="btn small" href="#/teams">← Teams</a></div>
+      ${teamPageTabs(tid, 'practice')}
+      ${practiceTabHtml(t)}`;
+    return;
+  }
   const games = db.games.filter(g => g.homeId === tid || g.awayId === tid);
   const an = analyze(games.filter(countsInSeason));   // playoff games count only if the season's playoff-stats choice says so
   const ts = an.teams[tid] || { ...TEAM_ZERO(), w: 0, l: 0, t: 0, gp: 0, offProd: null, conv: null };
@@ -3001,6 +3045,7 @@ function renderTeamPage(tid) {
   app.innerHTML = `
     <div class="row"><h1><span class="dot" style="background:${teamBg(t)}"></span>${esc(t.name)}</h1>
       <a class="btn small" href="#/leaders">← Leaders</a></div>
+    ${teamPageTabs(tid, 'season')}
     <p class="muted">${ts.gp} game${ts.gp === 1 ? '' : 's'} played</p>
     ${tiles([
       ['Record', `${ts.w}–${ts.l}${ts.t ? `–${ts.t}` : ''}`, 'Finished games'],
@@ -3158,7 +3203,7 @@ function addReturningPlayer(pid) {
 
 function draftRemovePlayer(i) {
   const pid = editing.players[i].id;
-  const used = db.games.some(g => g.events.some(e => e.playerId === pid || e.assistId === pid));
+  const used = [...db.games, ...db.practice].some(g => g.events.some(e => e.playerId === pid || e.assistId === pid || e.targetId === pid));
   if (used) return alert('This player has recorded stats, so they can’t be removed. You can still rename them.');
   editing.players.splice(i, 1);
   renderTeams();
@@ -3199,6 +3244,7 @@ function deleteTeamById(id) {
 
   const gameIds = games.map(g => g.id);
   db.games = db.games.filter(g => !gameIds.includes(g.id));
+  db.practice = db.practice.filter(g => g.practiceTeam !== id);   // the database deletes a team's practices with it
   db.teams = db.teams.filter(x => x.id !== id);
   persist(gameIds.length && { del: 'games', vals: gameIds },   // plays go with their games
     { del: 'teams', vals: [id] });                               // players go with their team
@@ -3226,6 +3272,7 @@ function resetAll() {
   const sid = s?.id || null, fresh = seed().teams.map(t => ({ ...t, seasonId: sid }));
   const oldGames = db.games.filter(inActiveSeason).map(g => g.id), oldTeams = db.teams.filter(inActiveSeason).map(t => t.id);
   db.games = db.games.filter(g => !oldGames.includes(g.id));
+  db.practice = db.practice.filter(g => !oldTeams.includes(g.practiceTeam));
   db.teams = [...db.teams.filter(t => !oldTeams.includes(t.id)), ...fresh];
   editing = null;
   const teams = fresh.map(teamRow), players = fresh.flatMap(playerRows);

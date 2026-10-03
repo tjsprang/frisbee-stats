@@ -7,8 +7,9 @@ const myTeamIds = () => (db.teamAdmins || []).filter(a => a.user_id === me()).ma
 // League admins manage every team; team admins (in Team Admin mode) manage their own, in the current season.
 const managesTeam = tid => !viewingPast() && (isAdmin() || (isTeamMode() && myTeamIds().includes(tid)));
 // Tracking (starting, recording, reopening) a game: only games in the current season.
+// A practice scrimmage (practice.js) belongs to one team, so that team's admins track it.
 const canTrack = g => !!g && !viewingPast() && inActiveSeason(g)
-  && (canEdit() || (isTeamMode() && (managesTeam(g.homeId) || managesTeam(g.awayId))));
+  && (canEdit() || (isTeamMode() && (isPractice(g) ? managesTeam(g.practiceTeam) : managesTeam(g.homeId) || managesTeam(g.awayId))));
 const myTeamsThisSeason = () => seasonTeams().filter(t => myTeamIds().includes(t.id));
 const teamAdminsOf = tid => (db.teamAdmins || []).filter(a => a.team_id === tid);
 
