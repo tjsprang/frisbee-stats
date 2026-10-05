@@ -25,12 +25,12 @@ async function renderTeamAdminHome() {
   // Only teams in each league's current season.
   const leagueIds = [...new Set(mine.data.map(r => r.league_id))];
   const [leagues, seasons] = leagueIds.length ? await Promise.all([
-    sb.from('leagues').select('id, name, border_colors').in('id', leagueIds),
+    sb.from('leagues').select('*').in('id', leagueIds),   // '*': sport only exists after supabase/017
     sb.from('seasons').select('id, league_id').eq('status', 'active').in('league_id', leagueIds)
   ]) : [{ data: [] }, { data: [] }];
   const activeIds = new Set((seasons.data || []).map(s => s.id));
   const teams = mine.data.filter(r => r.teams && activeIds.has(r.teams.season_id))
-    .map(r => ({ ...r.teams, league: (leagues.data || []).find(l => l.id === r.league_id) })).filter(t => t.league);
+    .map(r => ({ ...r.teams, league: (leagues.data || []).find(l => l.id === r.league_id) })).filter(t => t.league && t.league.sport !== 'soccer');
   teams.forEach(t => (leagueCache[t.league.id] = t.league));
   const pending = (reqs.data || []).filter(r => r.status === 'pending');
   const recent = (reqs.data || []).filter(r => r.status !== 'pending').slice(0, 3);

@@ -685,7 +685,7 @@ function loadLeague() {
       // No signal: fall back to the copy saved on this device, if there is one.
       const snap = !err.code && await loadSnapshot(id);
       if (snap && league?.id === id) {
-        db = { practice: [], ...snap.data }; dataLeagueId = id;   // copies saved before practices existed have none loadError = null; offlineData = snap.at;
+        db = { practice: [], ...snap.data }; dataLeagueId = id; loadError = null; offlineData = snap.at;   // copies saved before practices existed have none
         subscribeLeague(id);   // connects by itself once the signal is back
       } else loadError = dbErrorText(err);
     })
@@ -1244,10 +1244,10 @@ const liveBadge = '<span class="badge live" style="margin-left:6px">● LIVE</sp
 
 async function renderAdminHome() {
   app.innerHTML = '<h1>League Admin</h1><p class="muted">Loading your leagues…</p>';
-  const { data, error } = await sb.from('league_admins').select('leagues(id, name, border_colors)').eq('user_id', session.user.id);
+  const { data, error } = await sb.from('league_admins').select('leagues(*)').eq('user_id', session.user.id);   // '*': sport only exists after 017
   if (location.hash !== '#/admin') return;
   if (error) { app.innerHTML = `<h1>League Admin</h1><p class="msg error">${esc(dbErrorText(error))}</p>`; return; }
-  const mine = data.map(r => r.leagues).filter(Boolean).sort((a, b) => a.name.localeCompare(b.name));
+  const mine = data.map(r => r.leagues).filter(l => l && l.sport !== 'soccer').sort((a, b) => a.name.localeCompare(b.name));
   mine.forEach(l => leagueCache[l.id] = l);
   myLeagueIds = new Set(mine.map(l => l.id));
   const ids = mine.map(l => l.id);
@@ -1286,9 +1286,14 @@ function searchLeagues(kind) {
   clearTimeout(searchTimer);
   searchTimer = setTimeout(async () => {
     const q = document.getElementById('q').value.trim().replace(/[%_\\]/g, '\\$&');
-    let req = sb.from('leagues').select('id, name, border_colors').order('name').limit(25);
-    if (q) req = req.ilike('name', `%${q}%`);
-    const { data, error } = await req;
+    // Soccer leagues share this database (supabase/017) but belong to the soccer app. Before 017 there's no sport column.
+    const search = skipSoccer => {
+      let req = sb.from('leagues').select('id, name, border_colors').order('name').limit(25);
+      if (skipSoccer) req = req.neq('sport', 'soccer');
+      return q ? req.ilike('name', `%${q}%`) : req;
+    };
+    let { data, error } = await search(true);
+    if (error && /sport/.test(error.message)) ({ data, error } = await search(false));
     const box = document.getElementById('results');
     if (!box) return;
     if (error) { box.innerHTML = `<p class="msg error">${esc(dbErrorText(error))}</p>`; return; }
