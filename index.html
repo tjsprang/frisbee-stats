@@ -396,6 +396,8 @@
   .pill.show { display: block; }
   #sync { top: 64px; background: var(--bad); color: #fff; }
   #toast { bottom: 20px; background: var(--text); color: var(--bg); }
+  #toast .toast-action { margin-left: 8px; padding: 4px 12px; background: var(--accent); color: var(--accent-text); border: 0; }
+  .card-del { margin-top: -6px; margin-bottom: 12px; text-align: right; }
 
   /* Settings */
   .stepper { display: flex; align-items: center; gap: 18px; margin-top: 12px; }
@@ -838,10 +840,18 @@ function updateSyncBadge() {
 }
 
 let toastTimer;
-function toast(msg) {
+function toast(msg, action) {
   const el = document.getElementById('toast');
   el.textContent = msg; el.classList.add('show');
-  clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.remove('show'), 6000);
+  // An optional button, e.g. Undo: { label, run }.
+  if (action) {
+    const b = document.createElement('button');
+    b.className = 'small toast-action'; b.textContent = action.label;
+    b.onclick = () => { el.classList.remove('show'); action.run(); };
+    el.append(' ', b);
+  }
+  el.classList.toggle('has-action', !!action);
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.remove('show'), action ? 10000 : 6000);
 }
 
 // ----- Live updates from other devices -----
@@ -1057,6 +1067,7 @@ function route() {
       || (a.dataset.nav === 'teams' && ['profile', 'team', 'practice'].includes(page))
       || (a.dataset.nav === 'leaders' && page === 'hof') || (a.dataset.nav === 'standings' && page === 'playoffs')
       || a.dataset.nav === page));
+  if (page && page !== 'games') deletingGames = false;   // "Delete games…" turns off when you leave the page
   if (page === 'admin') return id === 'create' ? renderCreateLeague() : renderAdminHome();
   if (page === 'teamadmin') return id ? renderTeamRequest(id) : renderTeamAdminHome();
   if (page === 'player') return renderPlayerHome();
@@ -1396,6 +1407,11 @@ function gameCard(g) {
     ${info}<span class="badge ${g.status}">${STATUS[g.status]}</span></a>`;
 }
 
+// "Delete games…" on the Games page shows a Delete button under each game you're allowed to delete.
+let deletingGames = false;
+const gameItem = g => gameCard(g) + (deletingGames && canDeleteGame(g)
+  ? `<div class="card-del"><button class="small danger" onclick="deleteGame('${g.id}')">🗑 Delete</button></div>` : '');
+
 function renderGames() {
   const teams = seasonTeams(), games = seasonGames(), edit = canEdit();
   const opts = teams.map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join('');
@@ -1457,11 +1473,14 @@ function renderGames() {
     </div>
     <a class="btn" style="display:block;margin-bottom:12px" href="#/schedule">📅 Schedule creator</a>` : ''}
     ${games.length ? '' : `<p class="muted">No games yet.${edit && teams.length >= 2 ? ' Start one above, or build a season with the schedule creator.' : ''}</p>`}
-    ${live.length ? `<h2>Live now</h2>${live.map(gameCard).join('')}` : ''}
+    ${games.some(canDeleteGame) ? `<button class="small ${deletingGames ? 'primary' : 'danger'}" style="margin-bottom:8px"
+      onclick="deletingGames = !deletingGames; renderGames()">${deletingGames ? '✓ Done deleting' : '🗑 Delete games…'}</button>
+      ${deletingGames ? '<p class="muted">Tap Delete under a game to remove it. You can undo right after.</p>' : ''}` : ''}
+    ${live.length ? `<h2>Live now</h2>${live.map(gameItem).join('')}` : ''}
     ${upcoming.length ? `<div class="row"><h2>Upcoming</h2>
       ${edit ? '<button class="small" onclick="clearSchedule()">Clear schedule</button>' : ''}</div>
-      ${upcoming.map(gameCard).join('')}` : ''}
-    ${results.length ? `<h2>Results</h2>${results.map(gameCard).join('')}` : ''}
+      ${upcoming.map(gameItem).join('')}` : ''}
+    ${results.length ? `<h2>Results</h2>${results.map(gameItem).join('')}` : ''}
     ${seasonOverLink()}`;
   const home = document.getElementById('home'), away = document.getElementById('away');
   if (away) away.value = (teams.find(t => t.id !== home.value) || teams[1]).id;
@@ -2360,7 +2379,8 @@ function renderTracker(g) {
       ${isPractice(g) ? '<button onclick="editSides()">⇄ Sides</button>' : ''}
       ${db.detailsReady ? `<button onclick="timeoutSheet()">⏸ Timeout</button>
       <button onclick="windSheet()">🌬 Wind</button>` : ''}
-    </div>` : ''}`;
+    </div>` : ''}
+    ${canDeleteGame(g) ? `<button class="small danger" style="margin-top:18px" onclick="deleteGame('${g.id}')">🗑 Delete this ${isPractice(g) ? 'scrimmage' : 'game'}</button>` : ''}`;
   tickClocks();
 }
 
@@ -2863,18 +2883,44 @@ function renderBox(g) {
       ${g.status === 'live'
         ? `<a class="btn primary" href="#/game/${g.id}">Back to tracking</a>`
         : `<button onclick="reopen('${g.id}')">Reopen game</button>`}
-      ${isAdmin() || isPractice(g) ? `<button onclick="deleteGame('${g.id}')">Delete ${isPractice(g) ? 'scrimmage' : 'game'}</button>` : ''}
+      ${canDeleteGame(g) ? `<button class="danger" onclick="deleteGame('${g.id}')">🗑 Delete ${isPractice(g) ? 'scrimmage' : 'game'}</button>` : ''}
     </div>` : ''}`;
 }
 
 function reopen(id) { const g = game(id); g.status = 'live'; saveGame(g); location.hash = `#/game/${id}`; }
+// Who can delete a game: league admins (any game in the current season), team admins for their practices,
+// and team admins for a regular-season game their team is in that has no plays yet (started by mistake).
+const canDeleteGame = g => canTrack(g) && (isAdmin() || isPractice(g)
+  || ((g.stage || 'regular') === 'regular' && g.status !== 'scheduled' && !g.events.length));
+
 function deleteGame(id) {
-  if (!confirm('Delete this game and all its stats? This cannot be undone.')) return;
-  const practiceTeam = game(id)?.practiceTeam;
-  db.games = db.games.filter(g => g.id !== id);
-  db.practice = db.practice.filter(g => g.id !== id);
-  persist({ del: 'games', vals: [id] });
-  location.hash = practiceTeam ? `#/practice/${practiceTeam}` : '#/games';
+  const g = game(id);
+  if (!g || !canDeleteGame(g)) return;
+  const what = `${team(g.homeId)?.name || '?'} vs ${team(g.awayId)?.name || '?'}`, plays = g.events.length;
+  const playoff = g.stage === 'playoff';
+  const msg = g.status === 'scheduled' ? `Delete the scheduled game ${what}${g.when ? ` (${fmtWhen(g.when)})` : ''}?`
+    : plays ? `Delete ${what} and its ${plays} recorded play${plays === 1 ? '' : 's'}? Its stats will be removed from every total.`
+    : `Delete ${what}? No plays have been recorded in it.`;
+  if (!confirm(msg + (playoff ? '\n\nThis is a playoff game. A fresh, empty game will be made for this bracket spot.' : ''))) return;
+  db.games = db.games.filter(x => x.id !== id);
+  db.practice = db.practice.filter(x => x.id !== id);
+  // Team admins go through delete_game (supabase/018), which checks the game is theirs and unplayed.
+  persist(isAdmin() || isPractice(g) ? { del: 'games', vals: [id] } : { rpc: 'delete_game', args: { p_game_id: id } });
+  toast(`Deleted ${what}.`, playoff ? null : { label: 'Undo', run: () => restoreGame(g) });
+  const [page, pid] = location.hash.replace(/^#\/?/, '').split('/');
+  if ((page === 'game' || page === 'box') && pid === id) location.hash = g.practiceTeam ? `#/practice/${g.practiceTeam}` : '#/games';
+  else route();
+}
+
+// Undo a delete: save the game and its plays again (same ids, so nothing is duplicated).
+function restoreGame(g) {
+  if (game(g.id)) return;
+  (isPractice(g) ? db.practice : db.games).push(g);
+  const rows = g.events.map(e => eventRow(g, e));
+  persist({ upsert: 'games', rows: [gameRow(g)] },
+    ...Array.from({ length: Math.ceil(rows.length / 500) }, (_, i) => ({ upsert: 'events', rows: rows.slice(i * 500, i * 500 + 500) })));
+  toast('Game restored.');
+  route();
 }
 
 // ---------- Leaderboard ----------
